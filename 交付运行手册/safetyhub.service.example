@@ -1,0 +1,16 @@
+[Unit]
+Description=LLM-SafetyHub FastAPI Service
+After=network.target
+
+[Service]
+Type=simple
+User=safetyhub
+Group=safetyhub
+WorkingDirectory=/opt/NF-SafetyHub
+EnvironmentFile=/opt/NF-SafetyHub/.env
+ExecStart=/opt/NF-SafetyHub/.venv/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

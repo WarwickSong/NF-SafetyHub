@@ -1,0 +1,32 @@
+body {
+  margin: 0;
+  color: #1f2937;
+  background: #f3f4f6;
+  font-family: Arial, "Microsoft YaHei", sans-serif;
+}
+
+.page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.card {
+  width: min(720px, 100%);
+  padding: 32px;
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.08);
+}
+
+h1 {
+  margin: 0 0 12px;
+  font-size: 32px;
+}
+
+p {
+  margin: 0;
+  line-height: 1.7;
+}
