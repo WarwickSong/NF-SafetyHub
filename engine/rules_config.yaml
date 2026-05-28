@@ -1,3 +1,224 @@
-version: "0.1.0"
-keyword_rules: []
-regex_rules: []
+version: "0.2.0"
+keyword_rules:
+  - id: "KW-001"
+    name: "商业机密-产品路线图"
+    keywords: ["产品路线图", "roadmap", "产品规划"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: true
+    description: "拦截包含产品路线图相关关键词的对话"
+  - id: "KW-002"
+    name: "凭据-密码明文"
+    keywords: ["password=", "passwd=", "密码是"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: true
+    description: "拦截包含明文密码的对话"
+  - id: "KW-003"
+    name: "凭据-访问令牌"
+    keywords: ["access_token", "refresh_token", "bearer token"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: true
+    description: "拦截令牌相关敏感字段"
+  - id: "KW-004"
+    name: "内部信息-内网地址"
+    keywords: ["内网地址", "internal endpoint", "intranet"]
+    level: "warn"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: true
+    description: "提醒可能包含内部网络信息"
+  - id: "KW-005"
+    name: "商业机密-客户名单"
+    keywords: ["客户名单", "客户清单", "客户列表"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: true
+    description: "拦截客户名单类敏感信息"
+  - id: "KW-006"
+    name: "商业机密-报价策略"
+    keywords: ["报价策略", "底价", "投标底价"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: true
+    description: "拦截报价和投标底价信息"
+  - id: "KW-007"
+    name: "研发信息-源代码泄露"
+    keywords: ["源码仓库", "source code", "gitlab token"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: true
+    description: "拦截源代码仓库和访问凭据"
+  - id: "KW-008"
+    name: "财务信息-财报草稿"
+    keywords: ["财报草稿", "未披露财报", "利润预测"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: true
+    description: "拦截未披露财务信息"
+  - id: "KW-009"
+    name: "人事信息-薪酬"
+    keywords: ["薪酬表", "工资单", "绩效评级"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: true
+    description: "拦截人事薪酬绩效信息"
+  - id: "KW-010"
+    name: "法务信息-合同条款"
+    keywords: ["保密协议", "合同底稿", "违约条款"]
+    level: "warn"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: true
+    description: "提醒可能包含法务合同信息"
+  - id: "KW-011"
+    name: "安全信息-漏洞细节"
+    keywords: ["漏洞利用", "exploit", "0day"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: true
+    description: "拦截漏洞利用细节"
+  - id: "KW-012"
+    name: "生产信息-数据库连接"
+    keywords: ["数据库密码", "jdbc:", "mongodb://"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: true
+    description: "拦截数据库连接信息"
+  - id: "KW-013"
+    name: "云资源-密钥"
+    keywords: ["secret_access_key", "aws_secret", "aliyun_secret"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: true
+    description: "拦截云资源密钥字段"
+  - id: "KW-014"
+    name: "企业信息-组织架构"
+    keywords: ["组织架构", "汇报关系", "人员编制"]
+    level: "warn"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: true
+    description: "提醒可能包含内部组织信息"
+  - id: "KW-015"
+    name: "会议信息-纪要"
+    keywords: ["高管会议纪要", "董事会纪要", "战略会议"]
+    level: "warn"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: true
+    description: "提醒可能包含敏感会议内容"
+  - id: "KW-016"
+    name: "账号信息-私钥"
+    keywords: ["private key", "BEGIN RSA PRIVATE KEY", "BEGIN OPENSSH PRIVATE KEY"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: true
+    description: "拦截私钥内容"
+  - id: "KW-017"
+    name: "数据资产-用户画像"
+    keywords: ["用户画像", "用户标签", "画像数据"]
+    level: "warn"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: true
+    description: "提醒可能包含用户画像数据"
+  - id: "KW-018"
+    name: "运营信息-增长策略"
+    keywords: ["增长策略", "拉新策略", "转化漏斗"]
+    level: "warn"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: true
+    description: "提醒可能包含运营策略"
+  - id: "KW-019"
+    name: "系统信息-生产配置"
+    keywords: ["生产配置", "prod config", "线上配置"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: true
+    description: "拦截生产配置内容"
+  - id: "KW-020"
+    name: "密级标识-绝密"
+    keywords: ["绝密", "confidential", "top secret"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: true
+    description: "拦截显式密级标识内容"
+regex_rules:
+  - id: "RG-001"
+    name: "PII-中国手机号"
+    pattern: "(?<!\\d)1[3-9]\\d{9}(?!\\d)"
+    level: "block"
+    enabled: true
+    description: "检测中国大陆手机号"
+  - id: "RG-002"
+    name: "PII-身份证号"
+    pattern: "(?<!\\d)[1-9]\\d{5}(?:19|20)\\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\\d|3[01])\\d{3}[\\dXx](?!\\w)"
+    level: "block"
+    enabled: true
+    description: "检测18位身份证号"
+  - id: "RG-003"
+    name: "凭据-OpenAI API Key"
+    pattern: "sk-[A-Za-z0-9_-]{20,}"
+    level: "block"
+    enabled: true
+    description: "检测 OpenAI 风格 API Key"
+  - id: "RG-004"
+    name: "PII-邮箱地址"
+    pattern: "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"
+    level: "warn"
+    enabled: true
+    description: "检测邮箱地址"
+  - id: "RG-005"
+    name: "PII-银行卡号"
+    pattern: "(?<!\\d)(?:\\d[ -]?){16,19}(?!\\d)"
+    level: "block"
+    enabled: true
+    description: "检测常见银行卡号格式"
+  - id: "RG-006"
+    name: "网络信息-IPv4 地址"
+    pattern: "(?<!\\d)(?:10|172\\.(?:1[6-9]|2\\d|3[01])|192\\.168)\\.(?:\\d{1,3}\\.){1}\\d{1,3}(?!\\d)"
+    level: "warn"
+    enabled: true
+    description: "检测内网 IPv4 地址"
+  - id: "RG-007"
+    name: "凭据-JWT"
+    pattern: "eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}"
+    level: "block"
+    enabled: true
+    description: "检测 JWT Token"
+  - id: "RG-008"
+    name: "凭据-AWS Access Key"
+    pattern: "AKIA[0-9A-Z]{16}"
+    level: "block"
+    enabled: true
+    description: "检测 AWS Access Key ID"
+  - id: "RG-009"
+    name: "凭据-私钥块"
+    pattern: "-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY-----"
+    level: "block"
+    enabled: true
+    description: "检测私钥块开头"
+  - id: "RG-010"
+    name: "网络信息-URL 携带 Token"
+    pattern: "https?://[^\\s]+(?:token|access_token|key|secret)=[^\\s&]+"
+    level: "block"
+    enabled: true
+    ignore_case: true
+    description: "检测 URL 中携带敏感 Token 参数"
