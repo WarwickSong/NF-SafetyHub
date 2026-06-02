@@ -30,10 +30,21 @@ safetyhub/
 │   ├── rules_config.yaml            # 规则配置文件
 │   └── models.py                    # ScannerResult 等数据模型
 │
-├── governance/                      # [治理层] 身份、权限与审批预留
+├── governance/                      # [治理层] 身份、权限、配额与审批预留
 │   ├── __init__.py
 │   ├── identity.py                  # 用户/APIKey 身份解析
 │   ├── api_keys.py                  # APIKey 元数据与权限预留
+│   ├── key_provider.py              # KeyProvider 抽象基类 + 工厂（阶段 3 预留接口，阶段 6 启用）
+│   ├── providers/                   # 中转站 Key 适配器（阶段 6 启用）
+│   │   ├── __init__.py
+│   │   ├── passthrough.py           # 阶段 1~5 默认占位实现，等价于不做映射
+│   │   ├── static_key.py            # 静态 Key 提供者
+│   │   ├── oneapi.py                # OneAPI/OneHub 适配器
+│   │   └── openai_compat.py         # OpenAI 兼容协议适配器
+│   ├── quota.py                     # F20 配额与速率限制（阶段 3 预留 schema，阶段 10 启用）
+│   ├── security_policy.py           # F18 Key 级安全策略（阶段 3 预留 schema，阶段 9 启用）
+│   ├── approval_chain.py            # F19 审批链路由（阶段 3 预留 schema，阶段 9 启用）
+│   ├── approval_scheduler.py        # F19 审批超时扫描器（阶段 9 启用）
 │   ├── model_policy.py              # 模型访问策略预留
 │   └── approval.py                  # 临时放行审批流程预留
 │
@@ -54,8 +65,9 @@ safetyhub/
 │   ├── database.py                  # 异步数据库连接管理
 │   ├── migrations/                  # 数据库迁移脚本
 │   ├── models.py                    # SQLAlchemy ORM 模型
-│   ├── archive.py                   # 消息归档 CRUD
+│   ├── archive.py                   # 消息归档与文生图元数据归档 CRUD
 │   ├── audit.py                     # 审计日志 CRUD
+│   ├── image_assets.py              # 文生图图片本体异步归档与资产记录（阶段 8）
 │   ├── retention.py                 # 数据保留与清理任务
 │   └── admin_ops.py                 # 管理员操作审计 CRUD
 │
@@ -67,6 +79,7 @@ safetyhub/
 │       ├── index.html               # 仪表盘
 │       ├── blocks.html              # 拦截记录
 │       ├── archives.html            # 消息归档
+│       ├── image_assets.html        # 文生图资产元数据与图片预览/下载（阶段 8 增强）
 │       ├── rules.html               # 规则管理
 │       ├── approvals.html           # 临时审批记录预留
 │       ├── api_keys.html            # APIKey/模型权限管理预留
@@ -238,7 +251,7 @@ settings = Settings()
 - 敏感配置（密码、Webhook URL、加密密钥、上游 Key）通过环境变量注入，不硬编码
 - 启动时进行配置校验，生产环境缺少 `admin_password`、`upstream_url` 或弱密码时直接启动失败
 - 规则文件路径可配置，方便测试时使用不同的规则集
-- APIKey 与模型权限配置先预留文件和数据结构，v1.0 默认走单上游，v1.1 后逐步启用多上游和细粒度授权
+- APIKey 与模型权限配置先预留文件和数据结构，阶段 1~4 默认走单上游，阶段 5 启用 APIKey 与模型权限，阶段 6 后逐步启用多上游和细粒度授权
 - 数据保留、文件扫描、临时审批默认可关闭，避免 MVP 阶段扩大实现范围
 
 ---
@@ -261,57 +274,51 @@ router = APIRouter()
 
 @router.post("/chat/completions")
 async def chat_completions(request: Request):
-    body = await request.json()
-    is_stream = body.get("stream", False)
-    user_id = extract_user_id(request)
-
-    scan_result = await request.app.state.scanner.scan(
-        extract_text_from_messages(body.get("messages", []))
-    )
-
-    if scan_result.blocked:
-        await record_audit_and_alert(request, scan_result, user_id)
-        return await generate_fake_response(body, scan_result, is_stream)
-
-    if is_stream:
-        return await relay_stream(request, body, user_id, scan_result)
-    else:
-        return await relay_non_stream(request, body, user_id, scan_result)
+    return await relay_openai_compatible(request, "chat/completions")
 
 
-async def relay_stream(request, body, user_id, scan_result):
-    ...
+@router.api_route("/{upstream_path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+async def relay_openai_compatible(request: Request, upstream_path: str):
+    path = f"/v1/{upstream_path.strip('/')}"
+    body, raw_body = await read_request_body(request, path)
+    if path == "/v1/chat/completions":
+        scan_text = extract_text_from_request(path, body)
+        if scan_text:
+            scan_result = await request.app.state.scanner.scan(scan_text)
+            if scan_result.blocked:
+                return await generate_fake_response(body, scan_result, body.get("stream", False))
+
+    return await relay_to_upstream(request, path, body, raw_body)
 
 
-async def relay_non_stream(request, body, user_id, scan_result):
+def extract_text_from_request(path: str, body: dict) -> str:
     ...
 
 
 def extract_text_from_messages(messages: list) -> str:
-    ...
-
-
-def extract_user_id(request: Request) -> str:
     ...
 ```
 
 **核心流程**
 
 ```
-请求到达
+请求到达 /v1/{path}
   │
-  ├─ 提取 messages 文本
+  ├─ 判断接口类型
+  │     ├─ Chat → 提取 messages 文本并进入 Scanner
+  │     └─ 非 Chat（Embeddings/Completions/Responses/Images/未知接口/GET/DELETE/非 JSON/multipart）→ 阶段 1 默认透明透传
   │
-  ├─ Scanner 扫描
+  ├─ Chat Scanner 扫描
   │     │
-  │     ├─ blocked → 审计记录 + 告警推送 + 返回伪装回复
-  │     │
-  │     └─ passed → 转发到中转站
+  │     ├─ blocked → 返回 Chat Completions 兼容伪装回复
+  │     └─ passed/warn → 转发到中转站
   │                   │
-  │                   ├─ 流式：SSE 逐 chunk 透传
-  │                   └─ 非流式：JSON 透传
+  │                   └─ Chat 流式：SSE 逐 chunk 透传
   │
-  └─ 异步归档（不阻塞响应）
+  ├─ 非 Chat 请求
+  │     └─ 默认透传到中转站；后续仅按明确业务需要增加脱敏或资产归档
+  │
+  └─ 阶段 3 接入异步归档与审计
 ```
 
 ---
@@ -685,18 +692,24 @@ class MessageArchive(Base):
     api_key_id = Column(String(64), nullable=True, index=True)
     model = Column(String(64), nullable=False, index=True)
     capability = Column(String(32), default="chat", index=True)
-    prompt = Column(Text, nullable=False)
+    # ---- 阶段 3 双份 prompt 存储（F6.1-C5）：原始 + 脱敏后 ----
+    prompt_original = Column(Text, nullable=False)
+    prompt_desensitized = Column(Text, nullable=True)
+    is_desensitized = Column(Boolean, default=False, index=True)
     response = Column(Text, nullable=True)
     is_stream = Column(Boolean, default=False)
     is_blocked = Column(Boolean, default=False)
     blocked_rule_id = Column(String(64), nullable=True)
     approval_id = Column(String(64), nullable=True, index=True)
     file_ids = Column(Text, nullable=True)
+    image_metadata = Column(Text, nullable=True)
     prompt_tokens = Column(Integer, default=0)
     completion_tokens = Column(Integer, default=0)
     created_at = Column(DateTime, server_default=func.now(), index=True)
     completed_at = Column(DateTime, nullable=True)
     latency_ms = Column(Integer, nullable=True)
+    # ---- v1.2 Key 级安全策略关联（v1.0 仅建字段，不写入） ----
+    security_policy_id = Column(String(64), nullable=True, index=True)
 
     __table_args__ = (
         Index("ix_archives_user_time", "user_id", "created_at"),
@@ -722,6 +735,8 @@ class AuditLog(Base):
     action_taken = Column(String(16), nullable=False)
     approval_id = Column(String(64), nullable=True, index=True)
     created_at = Column(DateTime, server_default=func.now(), index=True)
+    # ---- v1.2 Key 级安全策略关联（v1.0 仅建字段，不写入） ----
+    security_policy_id = Column(String(64), nullable=True, index=True)
 
     __table_args__ = (
         Index("ix_audits_rule_time", "rule_id", "created_at"),
@@ -736,13 +751,37 @@ class ApiKeyRecord(Base):
     key_hash = Column(String(128), unique=True, nullable=False)
     key_prefix = Column(String(16), nullable=False)
     key_suffix = Column(String(8), nullable=False)
+    name = Column(String(128), nullable=True)
     owner_user_id = Column(String(128), nullable=False, index=True)
     owner_department = Column(String(128), nullable=True, index=True)
+    cost_center = Column(String(64), nullable=True, index=True)
     status = Column(String(16), default="active", index=True)
     allowed_models = Column(Text, nullable=True)
     allowed_capabilities = Column(Text, nullable=True)
+    # ---- v1.1 中转站映射字段（v1.0 仅建表，不写入） ----
+    provider_name = Column(String(64), nullable=False, default="passthrough")
+    upstream_route_id = Column(String(64), nullable=True)
+    upstream_key_id = Column(String(128), nullable=True)
+    upstream_key_prefix = Column(String(16), nullable=True)
+    upstream_key_encrypted = Column(Text, nullable=True)
+    # ---- 阶段 5 K-Sync / K-Decoupled 模式标记（F15.1.5） ----
+    # False: K-Sync（safetyhub_key 与 upstream_key 一致，默认）
+    # True:  K-Decoupled（中转站 Key 已被替换或独立生成，与前哨站 Key 解耦）
+    is_decoupled = Column(Boolean, default=False, index=True)
+    # ---- v1.1 F20 细粒度配额与速率限制（v1.0 仅建字段，NULL 表示无限制） ----
+    model_quotas = Column(Text, nullable=True)
+    capability_quotas = Column(Text, nullable=True)
+    rate_limits = Column(Text, nullable=True)
+    usage_snapshot = Column(Text, nullable=True)
+    # ---- v1.2 F18/F19 Key 级安全策略与审批链关联（v1.0 仅建字段，NULL 表示走全局） ----
+    security_policy_id = Column(String(64), nullable=True, index=True)
+    approval_chain_id = Column(String(64), nullable=True, index=True)
+    # ---- 总配额与生命周期 ----
+    quota_total = Column(Integer, default=0)
+    quota_used = Column(Integer, default=0)
     created_at = Column(DateTime, server_default=func.now(), index=True)
     expires_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
 
 
 class ApprovalRequest(Base):
@@ -759,6 +798,78 @@ class ApprovalRequest(Base):
     approver = Column(String(128), nullable=True)
     expires_at = Column(DateTime, nullable=False, index=True)
     decided_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), index=True)
+    # ---- v1.2 F19 审批链关联（v1.0 仅建字段，NULL 表示无审批链） ----
+    chain_id = Column(String(64), nullable=True, index=True)
+    current_level = Column(Integer, default=0)
+    escalated_at = Column(DateTime, nullable=True)
+
+
+class SecurityPolicy(Base):
+    """v1.2 F18 Key 级安全策略表。
+    v1.0 仅建表，不写入。"""
+    __tablename__ = "security_policies"
+
+    id = Column(String(64), primary_key=True)
+    name = Column(String(128), nullable=False)
+    description = Column(Text, nullable=True)
+    # 相对于全局规则的覆盖（JSON）：{"KW-001": "disabled", "RG-003": "warn"}
+    rule_overrides = Column(Text, nullable=False, default="{}")
+    # 决策阈值
+    block_threshold = Column(String(16), default="block")
+    warn_to_block_keywords = Column(Text, nullable=True)
+    # 不可降级的高危规则白名单（JSON 数组）
+    immutable_rules = Column(Text, nullable=True)
+    # 策略继承（最多 3 级）
+    inherit_from = Column(String(64), nullable=True, index=True)
+    is_default = Column(Boolean, default=False)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class ApprovalChain(Base):
+    """v1.2 F19 审批链表。
+    v1.0 仅建表，不写入。"""
+    __tablename__ = "approval_chains"
+
+    id = Column(String(64), primary_key=True)
+    name = Column(String(128), nullable=False)
+    description = Column(Text, nullable=True)
+    # 多级审批节点（JSON 数组）：
+    # [{"level": 1, "approver_type": "user", "approver_id": "xxx",
+    #   "timeout_minutes": 30, "on_timeout": "escalate"}, ...]
+    chain_definition = Column(Text, nullable=False, default="[]")
+    # 触发条件
+    trigger_rule_levels = Column(Text, nullable=True)
+    trigger_capabilities = Column(Text, nullable=True)
+    # 整链超时策略：auto_reject / auto_approve / hold
+    escalation_policy = Column(String(32), default="auto_reject")
+    # 不可审批的高危规则（这些规则即使绑定审批链也直接 block）
+    blocked_rules = Column(Text, nullable=True)
+    is_default = Column(Boolean, default=False)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class ImageAsset(Base):
+    __tablename__ = "image_assets"
+
+    id = Column(String(64), primary_key=True)
+    request_id = Column(String(64), nullable=False, index=True)
+    user_id = Column(String(128), nullable=False, index=True)
+    model = Column(String(64), nullable=True, index=True)
+    prompt_hash = Column(String(64), nullable=True)
+    asset_index = Column(Integer, default=0)
+    source_type = Column(String(32), nullable=False)
+    source_url = Column(Text, nullable=True)
+    local_path = Column(Text, nullable=True)
+    sha256 = Column(String(64), nullable=True, index=True)
+    mime_type = Column(String(64), nullable=True)
+    size_bytes = Column(Integer, nullable=True)
+    width = Column(Integer, nullable=True)
+    height = Column(Integer, nullable=True)
+    download_status = Column(String(32), default="pending", index=True)
+    expires_at = Column(DateTime, nullable=True, index=True)
     created_at = Column(DateTime, server_default=func.now(), index=True)
 
 
@@ -1182,6 +1293,15 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 |------|------|-----------|--------------|
 | `identity.py` | 解析用户、APIKey、来源 IP、客户端标识 | 统一生成 `RequestContext`，写入日志/归档/审计 | 接入企业 SSO、JWT claims、APIKey 归属映射 |
 | `api_keys.py` | APIKey 元数据、状态、所属用户/部门 | 只存储哈希和只读占位，不做复杂授权 | 支持 APIKey 启停、额度、模型 allowlist |
+| `key_provider.py` | KeyProvider 抽象基类与工厂 | 仅定义接口，默认走 `passthrough` 占位 | 工厂根据 `key_provider_type` 实例化具体 Provider |
+| `providers/passthrough.py` | 默认占位实现 | 所有方法抛 `NotImplementedError` 或返回空 | 始终保留作为 fallback |
+| `providers/static_key.py` | 静态 Key 提供者 | 不实现 | 从配置读取中转站 Key，绑定时手动选择 |
+| `providers/oneapi.py` | OneAPI/OneHub 适配器 | 不实现 | 调用 `/api/token` 创建/吊销 |
+| `providers/openai_compat.py` | OpenAI 兼容协议适配器 | 不实现 | 调用 `/v1/api-keys` 接口 |
+| `quota.py` | F20 配额与速率限制 | 不实现 | 阶段 10 启用，提供 check_quota / check_rate_limit / update_usage |
+| `security_policy.py` | F18 Key 级安全策略 | 不实现 | 阶段 9 启用，提供 load/inheritance/apply_overrides |
+| `approval_chain.py` | F19 审批链路由 | 不实现 | 阶段 9 启用，提供 resolve_approver / on_approval_decision / on_timeout |
+| `approval_scheduler.py` | F19 审批超时扫描器 | 不实现 | 阶段 9 启用，定时扫描超时审批请求 |
 | `model_policy.py` | 模型权限策略 | 默认允许配置中的模型集合 | 支持按用户/APIKey/部门控制模型、上下文长度、工具调用 |
 | `approval.py` | 临时审批流程 | 预留数据模型和接口，不阻塞主链路 | 支持敏感请求人工审批后一次性放行 |
 
@@ -1190,7 +1310,172 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 - APIKey 永不明文入库，只存哈希、前后缀展示、创建时间、状态、归属信息
 - 模型权限采用 `user_id + api_key_id + model + capability` 四元组预留，避免后续重构
 - capability 至少预留 `chat`、`vision`、`file_upload`、`function_call`、`mcp_tool`、`reasoning`、`embedding`
-- v1.0 不实现复杂权限决策，但 `RequestContext`、数据库字段和审计字段必须提前带上 `api_key_id`、`model`、`capability`
+- 阶段 1~4 不实现复杂权限决策，但 `RequestContext`、数据库字段和审计字段必须提前带上 `api_key_id`、`model`、`capability`
+
+#### 2.11.1 `governance/key_provider.py` — KeyProvider 抽象层
+
+```python
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+
+
+@dataclass
+class UpstreamKeyInfo:
+    key_id: str                       # 中转站侧的 Key ID
+    key_prefix: str                   # 前后缀拼接，例如 "sk-ab...wxyz"
+    key_secret: str | None            # 完整 Key（仅 create 时返回，不持久化明文）
+    model_allowlist: list[str]
+    metadata: dict
+
+
+@dataclass
+class KeyCreateParams:
+    name: str
+    model_allowlist: list[str] | None = None
+    capability_allowlist: list[str] | None = None
+    quota: int | None = None
+    expires_at: str | None = None
+    metadata: dict | None = None
+
+
+class KeyProvider(ABC):
+    """中转站 API Key 管理的抽象接口。
+
+    不同中转站的 Key 创建/吊销/查询方式不同，
+    通过实现这个接口来适配。
+    切换中转站 = 替换 Provider 实现 + 修改配置，
+    SafetyHub 核心链路与前端零改动。
+    """
+
+    @abstractmethod
+    async def create_key(self, params: KeyCreateParams) -> UpstreamKeyInfo: ...
+
+    @abstractmethod
+    async def revoke_key(self, key_id: str) -> bool: ...
+
+    @abstractmethod
+    async def get_key_info(self, key_id: str) -> UpstreamKeyInfo | None: ...
+
+    @abstractmethod
+    async def list_keys(self) -> list[UpstreamKeyInfo]: ...
+
+    @property
+    @abstractmethod
+    def provider_name(self) -> str: ...
+
+    @property
+    @abstractmethod
+    def upstream_base_url(self) -> str: ...
+
+
+def create_key_provider(provider_type: str, **kwargs) -> KeyProvider:
+    """KeyProvider 工厂方法，根据 settings.key_provider_type 实例化。"""
+    if provider_type == "passthrough":
+        from governance.providers.passthrough import PassthroughKeyProvider
+        return PassthroughKeyProvider(**kwargs)
+    if provider_type == "static":
+        from governance.providers.static_key import StaticKeyProvider
+        return StaticKeyProvider(**kwargs)
+    if provider_type == "oneapi":
+        from governance.providers.oneapi import OneApiKeyProvider
+        return OneApiKeyProvider(**kwargs)
+    if provider_type == "openai_compat":
+        from governance.providers.openai_compat import OpenAICompatProvider
+        return OpenAICompatProvider(**kwargs)
+    raise ValueError(f"Unknown key provider: {provider_type}")
+```
+
+#### 2.11.2 阶段 3 预留改动清单
+
+> 这三个改动在阶段 1~3 透传模式下**对运行行为零影响**，但是阶段 5 启用 APIKey 管理时**避免改动核心链路代码**的关键。
+
+| 改动 ID | 文件 | 改动内容 | 兼容性保证 |
+|--------|------|---------|-----------|
+| **R1** | `proxy/header_policy.py` | `build_upstream_headers(headers, request_id, upstream_api_key=None)` 新增可选参数；当 `upstream_api_key is None` 时保持原有透传行为，否则剥离原始 Authorization 并替换为 `Bearer {upstream_api_key}` | 所有现有调用点传 `None`，行为不变；新增单元测试覆盖两条分支 |
+| **R2** | `storage/models.py` | 新增 `ApiKeyRecord` ORM 模型（包含阶段 5/6 全部字段），通过 `Base.metadata.create_all` 在启动时一并创建 `api_keys` 表 | 表存在但无人写入，不影响任何路径；不需要迁移脚本 |
+| **R3** | `config.py` | 新增 `key_provider_type: str = "passthrough"` 和 `key_provider_admin_token: str = ""` 配置项 | 默认值表示透传模式；阶段 1~5 不实例化 Provider，配置仅用于占位 |
+
+**改动量评估**：3 个文件，每个不超过 30 行；新增 1 个单元测试文件，约 50 行。
+
+#### 2.11.3 阶段 5/6 启用流程
+
+```
+1. 实现 governance/key_provider.py 抽象基类
+2. 实现 governance/providers/{passthrough, static_key, oneapi, openai_compat}.py
+3. 在 main.py lifespan 中调用 create_key_provider，注入到 app.state.key_provider
+4. 实现 middleware/identity.py：
+   ├─ 解析客户端 Authorization → 计算 key_hash
+   ├─ 查询 api_keys 表 → 取出 upstream_key_encrypted → 解密
+   └─ 写入 request.state.upstream_api_key
+5. 修改 proxy/relay.py：调用 build_upstream_headers 时传入 request.state.upstream_api_key
+6. 新增 admin/router.py 中的 /admin/api/api-keys CRUD 接口
+7. 新增 admin/static/api_keys.html 的编辑能力
+```
+
+> **关键**：以上 7 步全部是新增或封装，**不修改 R1、R2、R3 引入的接口签名和数据 schema**，因此核心链路（scanner/relay/archive/audit）和前端通用页面无需任何改动。
+
+#### 2.11.4 v1.0 扩展预留改动清单（F18/F19/F20）
+
+> 这一批预留对应《功能定义规划》F18 Key 级安全策略、F19 审批链路由、F20 细粒度配额。
+> 与 R1/R2/R3 同样满足"v1.0 仅 schema，运行行为零变化"原则。
+
+| 改动 ID | 文件 | 改动内容 | 关联功能 | 兼容性保证 |
+|--------|------|---------|---------|-----------|
+| **R6** | `storage/models.py` | `ApiKeyRecord` 新增 4 个 F20 字段：`model_quotas`、`capability_quotas`、`rate_limits`、`usage_snapshot`（全部 NULL 默认） | F20 | NULL 表示无限制，与 v1.0 透传行为一致 |
+| **R7** | `storage/models.py` | `ApiKeyRecord` 新增 2 个 F18/F19 字段：`security_policy_id`、`approval_chain_id`；`MessageArchive`、`AuditLog` 新增 `security_policy_id` 字段；`ApprovalRequest` 新增 `chain_id`、`current_level`、`escalated_at` 字段；`ApiKeyRecord` 新增 `cost_center` 字段 | F18 / F19 | 全部 NULL 默认，老数据无需回填 |
+| **R8** | `storage/models.py` | 新增 `SecurityPolicy` 与 `ApprovalChain` 两张 ORM 表，随 `create_all` 自动建表 | F18 / F19 | 表存在但无人写入，零影响 |
+
+**改动量评估**：1 个文件 `storage/models.py`，总计约 60 行新增代码；新增 1 个单元测试，约 40 行。
+
+#### 2.11.5 v1.2 启用 SecurityPolicy 流程
+
+```
+1. 实现 governance/security_policy.py：
+   ├─ load_policy(policy_id) → SecurityPolicy
+   ├─ resolve_inheritance(policy) → 合并继承链（最多 3 级）
+   └─ apply_overrides(rules, policy) → 返回应用 diff 后的有效规则集
+2. 修改 engine/scanner.py：
+   ├─ scan(text, policy=None) → 默认 None 走全局规则（向下兼容）
+   └─ 缓存策略编译结果，避免重复计算
+3. 修改 proxy/relay.py：
+   ├─ 从 request.state.api_key_record 读取 security_policy_id
+   ├─ 加载策略并传给 scanner.scan(text, policy)
+   └─ 命中后写入 audit_log.security_policy_id 和 message_archive.security_policy_id
+4. 实现 admin/api/security-policies CRUD 接口
+5. 实现 admin/static/security_policies.html 编辑页面
+```
+
+> **关键**：scanner.scan 接口签名通过默认参数 `policy=None` 向下兼容，所有现有调用点不需要改动。
+
+#### 2.11.6 阶段 9 启用 ApprovalChain 流程
+
+```
+1. 实现 governance/approval_chain.py：
+   ├─ resolve_approver(api_key, rule) → 根据 chain_definition 计算当前审批人
+   ├─ on_approval_decision(request_id, decision) → 推进到下一级或结束
+   └─ on_timeout(request_id) → 按 on_timeout 策略升级或拒绝
+2. 实现 governance/approval_scheduler.py：定时扫描超时审批请求
+3. 修改 notify/approval_webhook.py：审批通知按解析出的当前审批人发送
+4. 实现 admin/api/approval-chains CRUD 接口
+5. 实现 admin/static/approval_chains.html 编辑页面
+```
+
+> **关键**：审批链是阶段 9 新增的能力，所以"审批链"和"审批"是同时新增的，不存在改造已稳定代码的问题。
+
+#### 2.11.7 阶段 10 启用 F20 配额与速率限制流程
+
+```
+1. 实现 governance/quota.py：
+   ├─ check_quota(api_key, model, capability, request_tokens) → bool
+   ├─ check_rate_limit(api_key) → bool（滑动窗口）
+   └─ update_usage(api_key, model, completion_tokens) → 异步累加
+2. 修改 proxy/relay.py：
+   ├─ 请求进入时调用 check_quota / check_rate_limit
+   └─ 请求结束时异步调用 update_usage（不阻塞响应）
+3. 增强 admin/static/api_keys.html：配额与速率限制配置 UI
+```
+
+> **关键**：配额检查在 relay 边界进行，不进入 scanner 内部；超额返回 429，不消耗中转站配额。
 
 ### 2.12 `file_security/` — 文件上传安全预留
 

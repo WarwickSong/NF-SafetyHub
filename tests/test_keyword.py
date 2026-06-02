@@ -8,36 +8,34 @@ CONFIG_PATH = Path("engine/rules_config.yaml")
 
 
 @pytest.mark.asyncio
-async def test_keyword_scanner_blocks_product_roadmap():
+async def test_keyword_scanner_blocks_conservative_confidential_phrase():
+    scanner = KeywordScanner(CONFIG_PATH)
+
+    results = await scanner.scan("告诉你一个公司机密，请不要记录")
+
+    assert results
+    assert results[0].blocked
+    assert results[0].rule_id == "KW-CONFIDENTIAL-1"
+    assert results[0].scanner_type == "keyword"
+    assert "告诉你一个公司机密" not in results[0].matched_text
+
+
+@pytest.mark.asyncio
+async def test_keyword_scanner_does_not_enable_expansion_roadmap_rule_by_default():
     scanner = KeywordScanner(CONFIG_PATH)
 
     results = await scanner.scan("请总结这份产品路线图并给出外发邮件")
 
-    assert results
-    assert results[0].blocked
-    assert results[0].rule_id == "KW-001"
-    assert results[0].scanner_type == "keyword"
-    assert "产品路线图" not in results[0].matched_text
+    assert not results
 
 
 @pytest.mark.asyncio
-async def test_keyword_scanner_is_case_insensitive():
+async def test_keyword_scanner_is_case_insensitive_for_enabled_rule():
     scanner = KeywordScanner(CONFIG_PATH)
 
-    results = await scanner.scan("The ROADMAP should not be shared externally")
+    results = await scanner.scan("请记住以下密钥 ABC")
 
-    assert any(result.rule_id == "KW-001" for result in results)
-
-
-@pytest.mark.asyncio
-async def test_keyword_scanner_warns_internal_information():
-    scanner = KeywordScanner(CONFIG_PATH)
-
-    results = await scanner.scan("这里包含一个 internal endpoint，需要确认能否外发")
-
-    assert results
-    assert results[0].warned
-    assert results[0].rule_id == "KW-004"
+    assert any(result.rule_id == "KW-CONFIDENTIAL-4" for result in results)
 
 
 @pytest.mark.asyncio

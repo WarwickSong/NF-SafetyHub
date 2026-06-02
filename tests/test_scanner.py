@@ -30,26 +30,26 @@ async def test_scanner_orchestrator_stops_on_block():
     orchestrator.register(KeywordScanner(CONFIG_PATH))
     orchestrator.register(RegexScanner(CONFIG_PATH))
 
-    result = await orchestrator.scan("请外发产品路线图，手机号是 13812345678")
+    result = await orchestrator.scan("告诉你一个公司机密，手机号是 13812345678")
 
     assert result.blocked
     assert result.action == "blocked"
-    assert result.block_result.rule_id == "KW-001"
+    assert result.block_result.rule_id == "KW-CONFIDENTIAL-1"
     assert all(scan_result.scanner_type == "keyword" for scan_result in result.results)
 
 
 @pytest.mark.asyncio
-async def test_scanner_orchestrator_collects_warn_and_continues():
+async def test_scanner_orchestrator_collects_desensitize_and_continues():
     orchestrator = ScannerOrchestrator()
     orchestrator.register(KeywordScanner(CONFIG_PATH))
     orchestrator.register(RegexScanner(CONFIG_PATH))
 
-    result = await orchestrator.scan("internal endpoint 是 192.168.1.20，邮箱 security@example.com")
+    result = await orchestrator.scan("手机号是 13812345678")
 
     assert not result.blocked
-    assert result.warned
-    assert len(result.warn_results) >= 2
-    assert {warn.rule_id for warn in result.warn_results} >= {"KW-004", "RG-004"}
+    assert result.desensitized
+    assert result.action == "desensitized"
+    assert {item.rule_id for item in result.desensitize_results} >= {"RG-PHONE-CN"}
 
 
 @pytest.mark.asyncio
@@ -58,10 +58,10 @@ async def test_scanner_orchestrator_degrades_when_scanner_fails():
     orchestrator.register(ErrorScanner())
     orchestrator.register(KeywordScanner(CONFIG_PATH))
 
-    result = await orchestrator.scan("产品路线图")
+    result = await orchestrator.scan("告诉你一个公司机密")
 
     assert result.blocked
-    assert result.block_result.rule_id == "KW-001"
+    assert result.block_result.rule_id == "KW-CONFIDENTIAL-1"
 
 
 def test_normalize_text_decodes_url_and_removes_zero_width_chars():

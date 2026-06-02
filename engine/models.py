@@ -21,6 +21,10 @@ class ScannerResult:
         return self.hit and self.level == "warn"
 
     @property
+    def desensitized(self) -> bool:
+        return self.hit and self.level == "desensitize"
+
+    @property
     def passed(self) -> bool:
         return not self.hit or self.level == "pass"
 
@@ -43,8 +47,16 @@ class AggregatedScanResult:
         return any(result.warned for result in self.results)
 
     @property
+    def desensitized(self) -> bool:
+        return any(result.desensitized for result in self.results)
+
+    @property
     def block_result(self) -> ScannerResult | None:
         return next((result for result in self.results if result.blocked), None)
+
+    @property
+    def desensitize_results(self) -> list[ScannerResult]:
+        return [result for result in self.results if result.desensitized]
 
     @property
     def warn_results(self) -> list[ScannerResult]:
@@ -54,6 +66,8 @@ class AggregatedScanResult:
     def action(self) -> str:
         if self.blocked:
             return "blocked"
+        if self.desensitized:
+            return "desensitized"
         if self.warned:
             return "warned"
         return "passed"

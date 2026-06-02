@@ -1,4 +1,6 @@
+import asyncio
 from contextlib import asynccontextmanager
+from contextlib import suppress
 
 from fastapi import FastAPI
 
@@ -13,6 +15,14 @@ from proxy.upstream_router import get_default_upstream_router
 from storage.database import close_db, init_db
 
 
+async def periodic_rules_reload(scanner: ScannerOrchestrator, interval_seconds: int) -> None:
+    interval = max(1, interval_seconds)
+    while True:
+        await asyncio.sleep(interval)
+        with suppress(Exception):
+            await scanner.reload_all()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     validate_startup_settings(settings)
@@ -20,10 +30,17 @@ async def lifespan(app: FastAPI):
     scanner = ScannerOrchestrator()
     scanner.register(KeywordScanner(settings.rules_config_path))
     scanner.register(RegexScanner(settings.rules_config_path))
+    reload_task = asyncio.create_task(periodic_rules_reload(scanner, settings.rules_reload_interval))
     app.state.scanner = scanner
     app.state.upstream_router = get_default_upstream_router()
-    yield
-    await close_db()
+    app.state.rules_reload_task = reload_task
+    try:
+        yield
+    finally:
+        reload_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await reload_task
+        await close_db()
 
 
 app = FastAPI(

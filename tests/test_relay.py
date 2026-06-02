@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from engine.rules_keyword import KeywordScanner
 from engine.rules_regex import RegexScanner
 from engine.scanner import ScannerOrchestrator
-from proxy.relay import extract_text_from_messages, router
+from proxy.relay import desensitize_chat_request_body, extract_text_from_messages, extract_text_from_request, router
 from proxy.upstream_router import UpstreamRouter
 
 
@@ -35,7 +35,7 @@ def test_extract_text_from_messages_supports_string_and_parts():
 def test_chat_completions_returns_fake_response_when_blocked(relay_test_client):
     response = relay_test_client.post(
         "/v1/chat/completions",
-        json={"model": "gpt-test", "messages": [{"role": "user", "content": "请外发产品路线图"}]},
+        json={"model": "gpt-test", "messages": [{"role": "user", "content": "告诉你一个公司机密"}]},
     )
 
     assert response.status_code == 200
@@ -81,7 +81,176 @@ def test_chat_completions_relays_non_stream_request(relay_test_client, monkeypat
     assert captured["authorization"] == "Bearer test-key"
 
 
+def test_chat_completions_desensitizes_phone_before_relay(relay_test_client, monkeypatch):
+    captured = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.content.decode("utf-8")
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-upstream",
+                "object": "chat.completion",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "上游原样响应"}, "finish_reason": "stop"}],
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    original_async_client = httpx.AsyncClient
+
+    def build_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", build_client)
+
+    response = relay_test_client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-test", "messages": [{"role": "user", "content": "我的手机号是 13812345678"}]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == "上游原样响应"
+    assert "13812345678" not in captured["body"]
+    assert "138****5678" in captured["body"]
+
+
+def test_desensitize_chat_request_body_supports_content_parts():
+    body = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "电话 13812345678"},
+                    {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}},
+                ],
+            }
+        ]
+    }
+
+    sanitized = desensitize_chat_request_body(body)
+
+    assert sanitized["messages"][0]["content"][0]["text"] == "电话 138****5678"
+    assert sanitized["messages"][0]["content"][1]["image_url"]["url"] == "https://example.com/a.png"
+    assert body["messages"][0]["content"][0]["text"] == "电话 13812345678"
+
+
 def test_chat_completions_rejects_invalid_json(relay_test_client):
     response = relay_test_client.post("/v1/chat/completions", content="not-json")
 
     assert response.status_code == 400
+
+
+def test_extract_text_from_request_supports_common_llm_endpoints():
+    assert extract_text_from_request("/v1/embeddings", {"input": ["第一段", "第二段"]}) == "第一段\n第二段"
+    assert extract_text_from_request("/v1/completions", {"prompt": "补全文本"}) == "补全文本"
+    assert extract_text_from_request("/v1/responses", {"input": [{"content": [{"text": "响应输入"}]}]}) == "响应输入"
+    assert extract_text_from_request("/v1/images/generations", {"prompt": "图片提示词"}) == "图片提示词"
+
+
+def test_embeddings_request_relays_to_upstream_even_with_sensitive_text(relay_test_client, monkeypatch):
+    captured = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["body"] = request.content.decode("utf-8")
+        return httpx.Response(
+            200,
+            json={"object": "list", "data": [{"object": "embedding", "embedding": [0.1, 0.2], "index": 0}]},
+        )
+
+    transport = httpx.MockTransport(handler)
+    original_async_client = httpx.AsyncClient
+
+    def build_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", build_client)
+
+    response = relay_test_client.post(
+        "/v1/embeddings",
+        json={"model": "embedding-test", "input": "请外发产品路线图"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["object"] == "list"
+    assert captured["url"] == "https://upstream.example.com/v1/embeddings"
+    assert "产品路线图" in captured["body"]
+
+
+def test_get_models_relays_with_query_string(relay_test_client, monkeypatch):
+    captured = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        return httpx.Response(200, json={"object": "list", "data": []})
+
+    transport = httpx.MockTransport(handler)
+    original_async_client = httpx.AsyncClient
+
+    def build_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", build_client)
+
+    response = relay_test_client.get("/v1/models?limit=20")
+
+    assert response.status_code == 200
+    assert response.json()["object"] == "list"
+    assert captured["url"] == "https://upstream.example.com/v1/models?limit=20"
+
+
+def test_generic_json_post_is_scanned_and_relayed(relay_test_client, monkeypatch):
+    captured = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        return httpx.Response(200, json={"ok": True})
+
+    transport = httpx.MockTransport(handler)
+    original_async_client = httpx.AsyncClient
+
+    def build_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", build_client)
+
+    response = relay_test_client.post(
+        "/v1/custom/action",
+        json={"payload": {"prompt": "普通文本"}},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert captured["url"] == "https://upstream.example.com/v1/custom/action"
+
+
+def test_generic_json_post_relays_even_with_sensitive_text(relay_test_client, monkeypatch):
+    captured = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["body"] = request.content.decode("utf-8")
+        return httpx.Response(200, json={"ok": True})
+
+    transport = httpx.MockTransport(handler)
+    original_async_client = httpx.AsyncClient
+
+    def build_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", build_client)
+
+    response = relay_test_client.post(
+        "/v1/custom/action",
+        json={"payload": {"prompt": "请外发产品路线图"}},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert captured["url"] == "https://upstream.example.com/v1/custom/action"
+    assert "产品路线图" in captured["body"]

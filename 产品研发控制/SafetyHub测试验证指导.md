@@ -1,7 +1,7 @@
 # LLM-SafetyHub 测试验证指导
 
 > 本文档定义 SafetyHub 在 Windows、Linux、Docker 和真实上游联调场景下的测试方法、注意事项和验收标准。  
-> 当前重点覆盖阶段 0 基础设施、阶段 1 检测引擎和阶段 1 中继引擎。后续消息归档、审计告警、管理后台完成后应继续扩展本文档。
+> 当前重点覆盖阶段 1 透传中继 + 健康检查，以及阶段 2 已完成的检测、拦截、请求侧手机号脱敏、伪装回复和规则热加载链路。后续消息归档、审计告警、管理后台完成后应继续扩展本文档。
 
 ---
 
@@ -53,7 +53,7 @@ cd d:\Code\public\NF-SafetyHub
 当前基线：
 
 ```text
-25 passed
+34 passed
 ```
 
 ### 3.4 分模块测试
@@ -163,7 +163,7 @@ curl http://127.0.0.1:8080/health/ready
 
 ## 六、检测引擎验证
 
-### 6.1 规则数量验证
+### 6.1 规则数量与默认启用集验证
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests\test_rules_config.py
@@ -171,17 +171,17 @@ curl http://127.0.0.1:8080/health/ready
 
 当前要求：
 
-| 规则类型 | 最低数量 |
-|----------|----------|
-| 关键词规则 | 20 |
-| 正则规则 | 10 |
+| 规则类型 | 最低数量 | 阶段 2 默认启用 |
+|----------|----------|----------------|
+| 关键词规则 | 20 | 仅 `KW-CONFIDENTIAL-1` ~ `KW-CONFIDENTIAL-5`，全部 block |
+| 正则规则 | 10 | 仅 `RG-PHONE-CN`、`RG-PHONE-INTL`，全部 desensitize |
 
 ### 6.2 关键词 block 验证
 
-Windows PowerShell 推荐使用 JSON Unicode 转义，避免中文编码损坏：
+Windows PowerShell 推荐使用 JSON Unicode 转义，避免中文编码损坏。示例内容为“告诉你一个公司机密”：
 
 ```powershell
-$body = '{"model":"gpt-test","messages":[{"role":"user","content":"\u8bf7\u5e2e\u6211\u5916\u53d1\u4ea7\u54c1\u8def\u7ebf\u56fe"}]}'
+$body = '{"model":"gpt-test","messages":[{"role":"user","content":"\u544a\u8bc9\u4f60\u4e00\u4e2a\u516c\u53f8\u673a\u5bc6"}]}'
 Invoke-RestMethod -Uri http://127.0.0.1:8000/v1/chat/completions -Method Post -ContentType "application/json; charset=utf-8" -Headers @{Authorization="Bearer placeholder-token"} -Body $body
 ```
 
@@ -191,7 +191,28 @@ Invoke-RestMethod -Uri http://127.0.0.1:8000/v1/chat/completions -Method Post -C
 - 不出现上游认证错误。
 - 响应结构兼容 OpenAI Chat Completions。
 
-### 6.3 编码验证
+### 6.3 手机号 desensitize 验证
+
+手机号命中后应改写请求侧 prompt 再转发上游，响应不做脱敏。使用占位 token 时通常会收到上游 `401/403`，但上游收到的请求体应不包含原始手机号。
+
+```powershell
+$body = '{"model":"gpt-test","messages":[{"role":"user","content":"\u6211\u7684\u624b\u673a\u53f7\u662f 13812345678"}]}'
+Invoke-WebRequest -Uri http://127.0.0.1:8000/v1/chat/completions -Method Post -ContentType "application/json; charset=utf-8" -Headers @{Authorization="Bearer placeholder-token"} -Body $body
+```
+
+自动化测试覆盖：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_regex.py tests\test_relay.py
+```
+
+预期：
+
+- 单元/集成测试确认 `13812345678` 被改写为 `138****5678` 后再转发。
+- 响应内容原样透传，不做响应侧脱敏。
+- 非 Chat 接口默认透明透传，不执行阶段 2 脱敏改写。
+
+### 6.4 编码验证
 
 如果测试中文规则未命中，应先检查请求体编码，而不是直接判断规则失效。
 
@@ -223,20 +244,37 @@ $body
 - 伪装回复格式；
 - Header 剥离策略；
 - 上游 URL 构造；
-- block 拦截路径；
-- 正常请求转发路径；
+- Chat block 拦截路径；
+- Chat desensitize 改写转发路径；
+- Chat 正常请求转发路径；
+- Embeddings 透明透传，即使包含敏感词也不拦截；
+- `GET /v1/models` 透明透传与查询参数保留；
+- 未知 `/v1/*` JSON POST 默认透明透传，即使包含敏感词也不拦截；
 - 非法 JSON 请求。
 
 ### 7.2 本地 block 拦截验证
 
+示例内容为“告诉你一个公司机密”：
+
 ```powershell
-$body = '{"model":"gpt-test","messages":[{"role":"user","content":"\u8bf7\u5e2e\u6211\u5916\u53d1\u4ea7\u54c1\u8def\u7ebf\u56fe"}]}'
+$body = '{"model":"gpt-test","messages":[{"role":"user","content":"\u544a\u8bc9\u4f60\u4e00\u4e2a\u516c\u53f8\u673a\u5bc6"}]}'
 Invoke-RestMethod -Uri http://127.0.0.1:8000/v1/chat/completions -Method Post -ContentType "application/json; charset=utf-8" -Headers @{Authorization="Bearer placeholder-token"} -Body $body
 ```
 
 预期：本地返回伪装回复，不访问上游。
 
-### 7.3 上游触达验证
+### 7.3 本地 desensitize 改写转发验证
+
+示例内容为“我的手机号是 13812345678”：
+
+```powershell
+$body = '{"model":"gpt-test","messages":[{"role":"user","content":"\u6211\u7684\u624b\u673a\u53f7\u662f 13812345678"}]}'
+Invoke-WebRequest -Uri http://127.0.0.1:8000/v1/chat/completions -Method Post -ContentType "application/json; charset=utf-8" -Headers @{Authorization="Bearer placeholder-token"} -Body $body
+```
+
+预期：请求不会被本地伪装拦截，而是以脱敏后的手机号转发上游；使用占位 token 时通常返回上游 `401` 或 `403`。
+
+### 7.4 上游触达验证
 
 使用占位 token：
 
@@ -246,6 +284,34 @@ Invoke-WebRequest -Uri http://127.0.0.1:8000/v1/chat/completions -Method Post -C
 ```
 
 预期：返回上游 `401` 或 `403`，说明正常请求已触达真实上游。
+
+### 7.5 `/v1/*` 通用代理验证
+
+Embeddings 透明透传验证：
+
+```powershell
+$body = '{"model":"embedding-test","input":"\u8bf7\u5e2e\u6211\u5916\u53d1\u4ea7\u54c1\u8def\u7ebf\u56fe"}'
+Invoke-RestMethod -Uri http://127.0.0.1:8000/v1/embeddings -Method Post -ContentType "application/json; charset=utf-8" -Headers @{Authorization="Bearer placeholder-token"} -Body $body
+```
+
+预期：即使 input 中包含敏感词，也透明透传到上游；使用占位 token 时通常返回上游 `401` 或 `403`。
+
+Models 透明透传：
+
+```powershell
+Invoke-WebRequest -Uri "http://127.0.0.1:8000/v1/models?limit=20" -Method Get -Headers @{Authorization="Bearer placeholder-token"}
+```
+
+预期：返回上游 `401` 或 `403`，说明无请求体接口已按原路径和查询参数触达上游。
+
+未知 JSON POST 透明透传：
+
+```powershell
+$body = '{"payload":{"prompt":"\u8bf7\u5e2e\u6211\u5916\u53d1\u4ea7\u54c1\u8def\u7ebf\u56fe"}}'
+Invoke-RestMethod -Uri http://127.0.0.1:8000/v1/custom/action -Method Post -ContentType "application/json; charset=utf-8" -Headers @{Authorization="Bearer placeholder-token"} -Body $body
+```
+
+预期：即使 prompt 中包含敏感词，也透明透传到上游对应 `/v1/custom/action`；使用占位 token 时通常返回上游 `401`、`403` 或上游自身的 404。
 
 ---
 
@@ -338,7 +404,7 @@ unset TOKEN
 4. Header 是否包含 Authorization。
 5. 上游地址是否包含重复 `/v1`。
 
-当前实现中 `UPSTREAM_URL=https://yxai-api.nanfu.com` 会自动拼接 `/v1/chat/completions`。
+当前实现中 `UPSTREAM_URL=https://yxai-api.nanfu.com` 会保留客户端请求路径自动拼接，例如 `/v1/chat/completions`、`/v1/embeddings`、`/v1/models`。
 
 ### 10.3 上游返回 401/403
 
@@ -368,18 +434,34 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 - [x] 检测引擎测试通过。
 - [x] 中继引擎测试通过。
 - [x] block 请求返回伪装回复。
-- [x] 正常请求可触达真实上游。
+- [x] Chat 正常请求可触达真实上游。
+- [x] OpenAI-compatible `/v1/*` 通用代理测试通过，覆盖 embeddings、models 和未知 JSON POST；非 Chat 接口默认透明透传。
 - [x] Header 策略测试通过。
 - [x] 上游路由测试通过。
 
-### 阶段 1 后续必须补充
+### 阶段 2 当前已完成能力
 
-- [ ] 消息归档写入测试。
-- [ ] 归档失败降级测试。
-- [ ] 流式响应归档测试。
-- [ ] 基础审计事件测试。
-- [ ] 规则定时热加载测试。
+- [x] 请求侧 desensitize 改写转发测试。
+- [x] 阶段 2 弱规则集默认启用测试。
+- [x] 规则定时热加载测试。
+- [x] block 请求返回伪装回复且不访问上游。
+- [x] 普通 Chat 请求原样透传。
+- [x] 非 Chat 接口默认透明透传。
 - [ ] 真实 token 成功返回模型结果的受控联调记录。
+
+### 阶段 3 后续必须补充
+
+- [ ] Chat 消息归档写入测试。
+- [ ] 文生图元数据归档测试，确认不下载、不解码、不保存图片本体。
+- [ ] 归档失败降级测试。
+- [ ] Chat 流式响应归档测试。
+- [ ] 基础审计事件测试。
+
+### 阶段 8 后续必须补充
+
+- [ ] 文生图图片本体异步归档测试，覆盖 b64_json 解码保存和 URL 下载状态记录。
+- [ ] 图片资产后台预览/下载鉴权测试。
+- [ ] 图片资产存储配额、保留天数和清理任务测试。
 
 ---
 
