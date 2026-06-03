@@ -1,7 +1,7 @@
 # LLM-SafetyHub 测试验证指导
 
 > 本文档定义 SafetyHub 在 Windows、Linux、Docker 和真实上游联调场景下的测试方法、注意事项和验收标准。  
-> 当前重点覆盖阶段 1 透传中继 + 健康检查，以及阶段 2 已完成的检测、拦截、请求侧手机号脱敏、伪装回复和规则热加载链路。后续消息归档、审计告警、管理后台完成后应继续扩展本文档。
+> 当前重点覆盖阶段 1 透传中继 + 健康检查、阶段 2 检测/拦截/请求侧手机号脱敏/伪装回复/规则热加载链路，以及阶段 3 已落地的 Chat 归档、审计写入和最近对话观测 API。后续流式完整响应归档、文生图元数据归档、审计告警和管理后台完成后应继续扩展本文档。
 
 ---
 
@@ -53,8 +53,10 @@ cd d:\Code\public\NF-SafetyHub
 当前基线：
 
 ```text
-34 passed
+43 passed
 ```
+
+当前已知提示：Python 3.13 下存在 `datetime.utcnow()` 弃用警告，不影响功能；后续可统一替换为 timezone-aware UTC 时间。
 
 ### 3.4 分模块测试
 
@@ -212,7 +214,23 @@ Invoke-WebRequest -Uri http://127.0.0.1:8000/v1/chat/completions -Method Post -C
 - 响应内容原样透传，不做响应侧脱敏。
 - 非 Chat 接口默认透明透传，不执行阶段 2 脱敏改写。
 
-### 6.4 编码验证
+### 6.4 阶段 3 归档、审计与观测 API 验证
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_archive.py tests\test_audit.py tests\test_observations.py tests\test_relay.py
+```
+
+预期：
+
+- Chat 非流式正常请求、脱敏请求、拦截请求可写入归档。
+- 归档中可区分 `prompt_original` 与 `prompt_desensitized`。
+- 命中事件可写入 `audit_logs`，并记录规则 ID、级别、命中片段和全文 hash。
+- `/admin/api/observations/recent` 可返回最近少量完整 Chat 样本，包含 role、原始/脱敏 messages、响应和命中动作。
+- 归档/审计异常不影响 relay 主链路。
+
+当前边界：流式请求响应内容暂不做完整拼接归档，只归档 prompt、动作和 `{stream: true}` 响应占位。
+
+### 6.5 编码验证
 
 如果测试中文规则未命中，应先检查请求体编码，而不是直接判断规则失效。
 

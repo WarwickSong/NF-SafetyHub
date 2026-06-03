@@ -93,15 +93,24 @@
 
 | 类型 | 阶段 2 行为 | 阶段 7 升级方向 |
 |------|------------|----------------|
-| 手机号 | 请求侧识别并脱敏后转发 | 扩展到更多 PII 类型 |
-| 关键词 | 仅启用 3-5 个极保守关键词触发伪装回复 | 扩展到 20+ 条并接入分级策略 |
+| 手机号 | 请求侧仅对 `user`、`tool`、`function` 的 Chat messages 识别并脱敏后转发；跳过 `assistant`、`system`、`developer` | 扩展到更多 PII 类型 |
+| 关键词 | 仅启用 3-5 个极保守关键词；Chat block 默认只扫描最新一条允许扫描 role 的有文本 message 并触发伪装回复；跳过 `assistant`、`system`、`developer` | 扩展到 20+ 条并接入分级策略 |
 | 响应内容 | 原样透传，不脱敏 | 继续不做响应脱敏 |
 
-**请求侧脱敏路径**
+**请求侧处理路径**
 
+```text
+客户端 prompt/messages → SafetyHub 扫描最新允许 role 的有文本 message 判断 block → 未拦截时仅脱敏 user/tool/function messages → 转发中转站 → 中转站响应原样返回客户端
 ```
-客户端 prompt → SafetyHub 扫描 → 命中手机号 → prompt 脱敏后转发中转站 → 中转站响应原样返回客户端
-```
+
+**Chat role 处理边界**
+
+- block 判定只看最新一条允许扫描 role 的有文本 message；允许 role 为 `user`、`tool`、`function`，用于覆盖普通用户输入和 Agent tool/function/file content 等尾部新增内容。
+- `assistant`、`system`、`developer` 不参与 block 判定，避免前哨站过度干扰模型历史回复和提示词编排。
+- 脱敏改写仅覆盖 `user`、`tool`、`function` messages，避免历史手机号等 PII 随这些输入来源重复外发。
+- `assistant`、`system`、`developer` 不做脱敏改写，避免改写有效业务回复、系统提示词和开发者提示词。
+- 调研依据：OpenAI-compatible Chat Completions 将工具执行结果作为 `role: "tool"` 消息回传；Claude Messages 将 `tool_result` 放在 `user` 消息中回传；Codex/Claude Code/Trae Agent 等编码 Agent 通常把本地工具执行结果追加回下一次模型请求。因此阶段 2 以 `user`、`tool`、`function` 作为允许扫描/脱敏 role，既覆盖主要 Agent 输入来源，又避免干扰 `assistant`、`system`、`developer`。
+- 边界：OpenAI Responses API、Gemini Interactions/API 等非 Chat Completions 协议可能使用 `function_call_output`、`functionResponse`、`input` item 等结构，阶段 2 暂不套用 Chat role 规则，后续扩展时单独定义提取与脱敏策略。
 
 **不做响应脱敏的原因**
 
@@ -168,15 +177,16 @@
 | 任务 ID | 任务 | 所属功能 | 优先级 |
 |---------|------|----------|--------|
 | S3-01 | 编写 `storage/models.py`，创建 MessageArchive、AuditLog、ApiKeyRecord、ApprovalRequest、SecurityPolicy、ApprovalChain | 存储 | P0 |
-| S3-02 | MessageArchive 存储 `prompt_original`、`prompt_desensitized`、`is_desensitized` | F3/F6.1 | P0 |
-| S3-03 | 编写 `storage/archive.py`（ArchiveWriter + ArchiveReader） | F3 | P0 |
-| S3-04 | 非流式路径集成归档 | F3 | P0 |
-| S3-05 | 流式路径通过 `collect_stream` 收集完整响应后归档 | F3 | P0 |
+| S3-02 | ✅ MessageArchive 存储 `prompt_original`、`prompt_desensitized`、`is_desensitized`，并补充 `action_taken`、`matched_rule_ids` | F3/F6.1 | P0 |
+| S3-03 | ✅ 编写 `storage/archive.py`（ArchiveWriter + ArchiveReader） | F3 | P0 |
+| S3-04 | ✅ 非流式路径集成归档 | F3 | P0 |
+| S3-05 | ⏳ 流式路径通过 `collect_stream` 收集完整响应后归档；当前仅归档 `{stream: true}` 占位 | F3 | P0 |
 | S3-06 | 增加文生图元数据归档：prompt、model、size、style、n、response URL 或 b64 存在状态、request_id、用户、时间；阶段 3 不保存图片本体 | F3 | P1 |
-| S3-07 | 编写 `storage/audit.py`（AuditWriter + AuditReader） | F7 | P0 |
-| S3-08 | 在 scanner/relay 中写入 pass/desensitize/warn/block 命中审计 | F7 | P0 |
-| S3-09 | 写入失败降级，归档或审计失败不得影响主链路 | F3/F7 | P0 |
-| S3-10 | 编写 `tests/test_archive.py`、`tests/test_audit.py`、`tests/test_models.py`，覆盖 Chat 归档、文生图元数据归档和审计写入 | 测试 | P0 |
+| S3-07 | ✅ 编写 `storage/audit.py`（AuditWriter） | F7 | P0 |
+| S3-08 | 🟡 在 scanner/relay 中写入 desensitize/block 命中审计；warn 规则当前默认未启用，pass 无命中不写审计 | F7 | P0 |
+| S3-09 | ✅ 写入失败降级，归档或审计失败不得影响主链路 | F3/F7 | P0 |
+| S3-10 | 🟡 编写 `tests/test_archive.py`、`tests/test_audit.py`、`tests/test_observations.py` 和 relay 归档/审计测试；`tests/test_models.py`、文生图元数据归档测试仍待补 | 测试 | P0 |
+| S3-11 | ✅ 增加 `/admin/api/observations/recent` 最近对话观测 API，用于上线初期查看真实 role/messages 样本 | F3/F8 | P0 |
 
 ### 4.2 R1~R9 预留任务
 
@@ -196,18 +206,21 @@
 
 | 产出物 | 验收标准 |
 |--------|---------|
-| 消息归档 | Chat Completions 每次请求都有 request_id、user_id、api_key_id、model、capability、原始 prompt、脱敏 prompt、response |
+| 消息归档 | Chat 非流式请求已有 request_id、model、capability、原始 prompt、脱敏 prompt、response、action_taken、matched_rule_ids；user_id/api_key_id 后续随身份治理补齐 |
+| 最近观测 API | 已提供 `/admin/api/observations/recent`，用于上线初期查看最近少量完整 Chat 样本 |
 | 文生图元数据归档 | 文生图请求记录 request_id、user_id、model、prompt、size、style、n、响应引用类型、响应 URL 或 b64 存在状态；阶段 3 不保存图片本体 |
-| 审计日志 | 每次命中事件独立记录，含规则 ID、级别、命中片段哈希、时间 |
+| 审计日志 | 已对命中事件独立记录规则 ID、级别、命中片段、全文 hash、时间；pass 无命中暂不写入审计 |
 | 预留 schema | APIKey、审批、策略、配额相关字段与表均存在 |
 | 降级策略 | 数据库异常不影响用户请求 |
 
 ### 4.4 验收标准
 
-- [ ] Chat 正常请求、脱敏请求、拦截请求均能写入归档
+- [x] Chat 非流式正常请求、脱敏请求、拦截请求均能写入归档
+- [x] 归档/审计失败不影响主链路
+- [x] 最近对话观测 API 能返回 role、原始/脱敏 messages、响应和命中动作
 - [ ] Chat 流式请求能归档完整响应
 - [ ] 文生图请求能写入元数据归档，且不下载、不解码、不保存图片本体
-- [ ] 命中事件全部写入 audit_logs
+- [ ] 命中事件全部写入 audit_logs，包含 warn 规则启用后的审计覆盖
 - [ ] 原始 prompt 与脱敏后 prompt 两份可区分查询
 - [ ] APIKey 管理预留完成，当前透传行为零变化
 - [ ] 6 张表创建成功，所有预留字段齐全

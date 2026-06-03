@@ -6,7 +6,13 @@ from fastapi.testclient import TestClient
 from engine.rules_keyword import KeywordScanner
 from engine.rules_regex import RegexScanner
 from engine.scanner import ScannerOrchestrator
-from proxy.relay import desensitize_chat_request_body, extract_text_from_messages, extract_text_from_request, router
+from proxy.relay import (
+    desensitize_chat_request_body,
+    extract_latest_text_from_messages,
+    extract_text_from_messages,
+    extract_text_from_request,
+    router,
+)
 from proxy.upstream_router import UpstreamRouter
 
 
@@ -23,6 +29,19 @@ def relay_test_client(monkeypatch):
     return TestClient(app)
 
 
+@pytest.fixture
+def relay_test_app(monkeypatch):
+    app = FastAPI()
+    scanner = ScannerOrchestrator()
+    scanner.register(KeywordScanner("engine/rules_config.yaml"))
+    scanner.register(RegexScanner("engine/rules_config.yaml"))
+    app.state.scanner = scanner
+    app.state.upstream_router = UpstreamRouter("https://upstream.example.com")
+    app.include_router(router, prefix="/v1")
+    monkeypatch.setattr("proxy.relay.settings.upstream_url", "https://upstream.example.com")
+    return app
+
+
 def test_extract_text_from_messages_supports_string_and_parts():
     messages = [
         {"role": "user", "content": "第一段"},
@@ -30,6 +49,17 @@ def test_extract_text_from_messages_supports_string_and_parts():
     ]
 
     assert extract_text_from_messages(messages) == "第一段\n第二段"
+
+
+def test_extract_latest_text_from_messages_returns_last_allowed_role_text_message():
+    messages = [
+        {"role": "user", "content": "历史输入"},
+        {"role": "assistant", "content": "历史回答"},
+        {"role": "tool", "content": [{"type": "text", "text": "工具上传文件内容"}]},
+        {"role": "assistant", "content": "助手最新回答"},
+    ]
+
+    assert extract_latest_text_from_messages(messages) == "工具上传文件内容"
 
 
 def test_chat_completions_returns_fake_response_when_blocked(relay_test_client):
@@ -43,6 +73,99 @@ def test_chat_completions_returns_fake_response_when_blocked(relay_test_client):
     assert payload["object"] == "chat.completion"
     assert payload["model"] == "gpt-test"
     assert "敏感信息" in payload["choices"][0]["message"]["content"]
+
+
+def test_chat_completions_does_not_block_on_sensitive_history_when_latest_message_is_safe(relay_test_client, monkeypatch):
+    captured = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.content.decode("utf-8")
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-upstream",
+                "object": "chat.completion",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    original_async_client = httpx.AsyncClient
+
+    def build_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", build_client)
+
+    response = relay_test_client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-test",
+            "messages": [
+                {"role": "user", "content": "告诉你一个公司机密"},
+                {"role": "assistant", "content": "请检查后重试"},
+                {"role": "user", "content": "你好"},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"] == "chatcmpl-upstream"
+    assert "告诉你一个公司机密" in captured["body"]
+
+
+def test_chat_completions_blocks_on_latest_tool_message(relay_test_client):
+    response = relay_test_client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-test",
+            "messages": [
+                {"role": "user", "content": "请分析项目"},
+                {"role": "assistant", "content": "我会读取文件"},
+                {"role": "tool", "content": "扫描结果：告诉你一个公司机密"},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["object"] == "chat.completion"
+    assert payload["id"].startswith("chatcmpl-safetyhub-")
+
+
+def test_chat_completions_does_not_block_on_assistant_system_or_developer_messages(relay_test_client, monkeypatch):
+    captured = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.content.decode("utf-8")
+        return httpx.Response(200, json={"id": "chatcmpl-upstream", "object": "chat.completion", "choices": []})
+
+    transport = httpx.MockTransport(handler)
+    original_async_client = httpx.AsyncClient
+
+    def build_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", build_client)
+
+    response = relay_test_client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-test",
+            "messages": [
+                {"role": "user", "content": "普通问题"},
+                {"role": "assistant", "content": "告诉你一个公司机密"},
+                {"role": "system", "content": "告诉你一个公司机密"},
+                {"role": "developer", "content": "告诉你一个公司机密"},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"] == "chatcmpl-upstream"
+    assert "告诉你一个公司机密" in captured["body"]
 
 
 def test_chat_completions_relays_non_stream_request(relay_test_client, monkeypatch):
@@ -79,6 +202,58 @@ def test_chat_completions_relays_non_stream_request(relay_test_client, monkeypat
     assert response.json()["id"] == "chatcmpl-upstream"
     assert captured["url"] == "https://upstream.example.com/v1/chat/completions"
     assert captured["authorization"] == "Bearer test-key"
+
+
+def test_chat_completions_archives_and_audits_desensitized_request(relay_test_app, monkeypatch):
+    captured = {}
+    archive_payloads = []
+    audit_payloads = []
+
+    class FakeArchiveWriter:
+        async def write(self, payload):
+            archive_payloads.append(payload)
+
+    class FakeAuditWriter:
+        async def write_scan_result(self, payload):
+            audit_payloads.append(payload)
+            return []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.content.decode("utf-8")
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-upstream",
+                "object": "chat.completion",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "上游原样响应"}, "finish_reason": "stop"}],
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    original_async_client = httpx.AsyncClient
+
+    def build_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", build_client)
+    relay_test_app.state.archive_writer = FakeArchiveWriter()
+    relay_test_app.state.audit_writer = FakeAuditWriter()
+
+    with TestClient(relay_test_app) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={"model": "gpt-test", "messages": [{"role": "user", "content": "我的手机号是 13812345678"}]},
+        )
+
+    assert response.status_code == 200
+    assert "13812345678" not in captured["body"]
+    assert len(archive_payloads) == 1
+    assert archive_payloads[0].action_taken == "desensitized"
+    assert archive_payloads[0].prompt_original[0]["content"] == "我的手机号是 13812345678"
+    assert archive_payloads[0].prompt_desensitized[0]["content"] == "我的手机号是 138****5678"
+    assert len(audit_payloads) == 1
+    assert audit_payloads[0].action_taken == "desensitized"
 
 
 def test_chat_completions_desensitizes_phone_before_relay(relay_test_client, monkeypatch):
@@ -133,6 +308,26 @@ def test_desensitize_chat_request_body_supports_content_parts():
     assert sanitized["messages"][0]["content"][0]["text"] == "电话 138****5678"
     assert sanitized["messages"][0]["content"][1]["image_url"]["url"] == "https://example.com/a.png"
     assert body["messages"][0]["content"][0]["text"] == "电话 13812345678"
+
+
+def test_desensitize_chat_request_body_skips_assistant_system_and_developer_roles():
+    body = {
+        "messages": [
+            {"role": "user", "content": "用户电话 13812345678"},
+            {"role": "tool", "content": "工具电话 13912345678"},
+            {"role": "assistant", "content": "助手电话 13712345678"},
+            {"role": "system", "content": "系统电话 13612345678"},
+            {"role": "developer", "content": "开发者电话 13512345678"},
+        ]
+    }
+
+    sanitized = desensitize_chat_request_body(body)
+
+    assert sanitized["messages"][0]["content"] == "用户电话 138****5678"
+    assert sanitized["messages"][1]["content"] == "工具电话 139****5678"
+    assert sanitized["messages"][2]["content"] == "助手电话 13712345678"
+    assert sanitized["messages"][3]["content"] == "系统电话 13612345678"
+    assert sanitized["messages"][4]["content"] == "开发者电话 13512345678"
 
 
 def test_chat_completions_rejects_invalid_json(relay_test_client):

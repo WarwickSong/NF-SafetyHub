@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 from config import settings
@@ -13,6 +14,7 @@ async def init_db() -> None:
     _ensure_sqlite_parent_dir()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await _ensure_sqlite_archive_columns(conn)
 
 
 async def close_db() -> None:
@@ -21,6 +23,27 @@ async def close_db() -> None:
 
 def get_session_factory() -> async_sessionmaker:
     return SessionLocal
+
+
+SQLITE_MESSAGE_ARCHIVE_COLUMNS = {
+    "prompt_original": "TEXT DEFAULT ''",
+    "prompt_desensitized": "TEXT DEFAULT ''",
+    "is_desensitized": "BOOLEAN DEFAULT 0",
+    "action_taken": "VARCHAR(32) DEFAULT 'passed'",
+    "matched_rule_ids": "TEXT DEFAULT ''",
+    "image_metadata": "TEXT DEFAULT ''",
+}
+
+
+async def _ensure_sqlite_archive_columns(conn) -> None:
+    if not settings.db_url.startswith("sqlite+aiosqlite:///"):
+        return
+    rows = await conn.execute(text("PRAGMA table_info(message_archives)"))
+    existing_columns = {row[1] for row in rows.fetchall()}
+    for column_name, column_definition in SQLITE_MESSAGE_ARCHIVE_COLUMNS.items():
+        if column_name in existing_columns:
+            continue
+        await conn.execute(text(f"ALTER TABLE message_archives ADD COLUMN {column_name} {column_definition}"))
 
 
 def _ensure_sqlite_parent_dir() -> None:

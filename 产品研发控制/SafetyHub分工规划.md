@@ -36,6 +36,7 @@
 | 仪表盘 | `/admin/` | P0 | 阶段 4 / 阶段 8 增强 | 安全态势总览 |
 | 拦截记录 | `/admin/blocks` | P0 | 阶段 4 | 查看 block/warn/desensitize 事件 |
 | 消息归档 | `/admin/archives` | P0 | 阶段 4 | 查询完整 Chat 对话记录，展示原始/脱敏 prompt；阶段 3 先写入数据 |
+| 临时观测窗口 | `/admin/observations` | P0 | 阶段 3/4 上线初期 | 查看最近少量完整 Chat 对话、role 结构、原始/脱敏 messages、响应和命中动作，用于校验误拦截/误脱敏 |
 | 文生图资产 | `/admin/image-assets` | P1 | 阶段 4 元数据查看 / 阶段 8 图片预览下载 | 阶段 3 先归档文生图元数据，阶段 8 增加图片本体预览/下载 |
 | 审计日志 | `/admin/audits` | P0 | 阶段 4 | 规则命中和管理员操作审计 |
 | 规则管理 | `/admin/rules` | P1 | 阶段 4 只读 / 阶段 7 启用 | 阶段 2 弱扫描规则说明，阶段 7 完整规则管理 |
@@ -57,6 +58,9 @@ GET  /admin/api/health             → 管理端展示用健康状态
 GET  /admin/api/archives           → 分页查询（支持 user_id/keyword/model/is_blocked/time_range 筛选）
 GET  /admin/api/archives/{id}      → 单条归档详情
 GET  /admin/api/archives/stats     → 归档统计
+
+# 上线临时观测窗口
+GET  /admin/api/observations/recent → 最近少量完整 Chat 对话样本（含 role、原始/脱敏 messages、响应、命中动作）
 
 # 文生图资产（阶段 3 元数据，阶段 8 图片本体预览/下载）
 GET  /admin/api/image-assets        → 文生图资产分页查询

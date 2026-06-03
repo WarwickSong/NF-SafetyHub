@@ -1,16 +1,16 @@
 # LLM-SafetyHub 当前开发进展和下一步规划
 
 > 更新时间：2026-06-02  
-> 当前阶段：阶段 3 — 归档 + 审计准备启动  
-> 当前状态：阶段 1 OpenAI-compatible `/v1/*` 透传中继与健康检查已完成；阶段 2 弱扫描 MVP 已完成，具备 Scanner 调度、关键词/正则扫描、block 伪装回复、请求侧手机号 desensitize 改写转发、阶段 2 默认弱规则集收敛和规则定时热加载；阶段 3 归档 + 审计尚未开始。
+> 当前阶段：阶段 3 — 归档 + 审计数据闭环第一版  
+> 当前状态：阶段 1 OpenAI-compatible `/v1/*` 透传中继与健康检查已完成；阶段 2 弱扫描 MVP 已完成；阶段 3 已完成 Chat 归档/审计数据闭环第一版，包含 MessageArchive 字段扩展、ArchiveWriter、AuditWriter、relay 接入、最近对话观测 API 和测试覆盖；流式响应完整拼接归档、正式管理后台认证和前端观测页面仍待完成。
 
 ---
 
 ## 一、实际代码状态
 
-本状态基于当前仓库代码检查与测试结果。当前代码已经具备 FastAPI 应用入口、健康检查、Request ID、OpenAI-compatible `/v1/*` 通用中继转发、Header 安全透传、单上游路由、Scanner 调度、关键词/正则扫描、block 拦截伪装回复、请求侧手机号脱敏改写转发、基础 SSE 透传工具、规则定时热加载和静态后台首页骨架。
+本状态基于当前仓库代码检查与测试结果。当前代码已经具备 FastAPI 应用入口、健康检查、Request ID、OpenAI-compatible `/v1/*` 通用中继转发、Header 安全透传、单上游路由、Scanner 调度、关键词/正则扫描、block 拦截伪装回复、请求侧手机号脱敏改写转发、基础 SSE 透传工具、规则定时热加载、静态后台首页骨架、Chat 归档/审计写入、最近对话观测 API 和 SQLite 旧表缺列补齐能力。
 
-当前代码尚未具备消息归档写入、文生图元数据归档、文生图图片本体异步归档、审计写入、APIKey schema 预留、管理后台 API、管理后台认证、告警通知、文件安全、KeyProvider、审批链和配额能力。
+当前代码尚未具备流式响应完整拼接归档、文生图元数据归档、文生图图片本体异步归档、APIKey schema 预留、正式归档/审计查询 API、管理后台认证、前端观测页面、告警通知、文件安全、KeyProvider、审批链和配额能力。
 
 ---
 
@@ -20,8 +20,8 @@
 |------|------|----------|----------|
 | 阶段 1 | 透传中继 + 健康检查 | ✅ 已完成 | OpenAI-compatible `/v1/*` 通用透传、`/health/live`、`/health/ready`、Request ID、Header Policy、单上游路由已实现；Chat Completions 进入请求侧扫描、脱敏和伪装拦截，非 Chat 接口默认透明透传 |
 | 阶段 2 | 弱扫描 MVP | ✅ 已完成 | Scanner、关键词/正则、block 伪装回复、desensitize 改写转发、弱规则集收敛、定时热加载和对应测试已完成 |
-| 阶段 3 | 归档 + 审计 | ⏳ 待开始 | 当前仅有基础 ORM 表；未实现 `storage/archive.py`、`storage/audit.py`、Chat 归档、文生图元数据归档、审计链路集成和 R1~R9 预留 |
-| 阶段 4 | 管理员认证 + 最小后台 | ⏳ 待开始 | 仅有 `admin/static/index.html`、`style.css`、`app.js` 骨架；无 `admin/router.py`、`admin/schemas.py`、`middleware/auth.py` |
+| 阶段 3 | 归档 + 审计 | 🟡 部分完成 | 已实现 `storage/archive.py`、`storage/audit.py`、Chat 非流式归档/审计写入、block/desensitize 动作归档、最近对话观测 API、SQLite 旧表缺列补齐和相关测试；流式响应完整拼接归档、文生图元数据归档、R1~R9 schema 预留仍未完成 |
+| 阶段 4 | 管理员认证 + 最小后台 | ⏳ 待开始 | 已有 `admin/router.py` 的最近观测 API 和 `admin/static/index.html`、`style.css`、`app.js` 骨架；无 `admin/schemas.py`、`middleware/auth.py`、正式认证和前端观测页面 |
 | 阶段 5 | APIKey 管理 | ⏳ 待开始 | 无 APIKey CRUD、identity 中间件、加密存储和上游 Key 替换能力 |
 | 阶段 6 | KeyProvider + 中转站联通 | ⏳ 待开始 | `governance/` 仅有包初始化文件，无 Provider 抽象和适配器 |
 | 阶段 7 | 扫描升级 | ⏳ 待开始 | 当前已有 20 条关键词 + 10 条正则配置，其中阶段 2 默认仅启用 5 条极保守关键词 block 和 2 条手机号 desensitize；扩展规则保留但默认关闭，尚未形成阶段 7 的 30+ PII、分级策略和误报回归体系 |
@@ -62,12 +62,24 @@
 | 脱敏转发 | `proxy/relay.py` | 命中手机号 desensitize 后仅改写 Chat `messages` 文本字段，再转发上游；响应原样透传 |
 | 规则热加载 | `main.py` | 应用启动后按 `rules_reload_interval` 周期调用 `scanner.reload_all()`，关闭时取消后台任务 |
 
-### 3.3 测试与部署辅助
+### 3.3 阶段 3：归档 + 审计数据闭环第一版
+
+| 能力 | 文件 | 当前结果 |
+|------|------|----------|
+| 归档模型扩展 | `storage/models.py` | `MessageArchive` 已增加 `prompt_original`、`prompt_desensitized`、`is_desensitized`、`action_taken`、`matched_rule_ids`、`image_metadata` 等字段 |
+| SQLite 旧表兼容 | `storage/database.py` | 应用启动 `init_db()` 时对 SQLite 旧版 `message_archives` 表执行缺列补齐，避免无迁移系统时写入失败 |
+| 归档写入/读取 | `storage/archive.py` | 已实现 `ArchivePayload`、`ArchiveWriter`、`ArchiveReader.recent()`，支持原始/脱敏 prompt、响应、动作和规则 ID 归档 |
+| 审计写入 | `storage/audit.py` | 已实现 `AuditPayload`、`AuditWriter.write_scan_result()`，命中事件写入 `audit_logs`，包含规则、级别、命中片段和全文 hash |
+| Relay 集成 | `proxy/relay.py` | Chat block/desensitize/pass 路径接入归档；命中路径接入审计；归档/审计失败降级，不影响主链路 |
+| 最近观测 API | `admin/router.py`、`main.py` | 新增 `/admin/api/observations/recent`，返回最近少量 Chat 样本，包含 role、原始/脱敏 messages、响应、命中动作和规则 ID |
+| 已知边界 | `proxy/relay.py` | 流式请求当前归档 prompt、动作和 `{stream: true}` 响应占位，尚未拼接完整 SSE 响应内容 |
+
+### 3.4 测试与部署辅助
 
 | 类别 | 当前结果 |
 |------|----------|
-| 单元/集成测试 | 当前共 34 个测试，覆盖 health、keyword、regex、scanner、fake_response、relay、header_policy、upstream_router、rules_config、rules_reload |
-| 测试结果 | `.\.venv\Scripts\python.exe -m pytest` 实测通过，34 passed |
+| 单元/集成测试 | 当前共 43 个测试，覆盖 health、keyword、regex、scanner、fake_response、relay、header_policy、upstream_router、rules_config、rules_reload、archive、audit、observations |
+| 测试结果 | `python -m pytest` 实测通过，43 passed；Python 3.13 下存在 `datetime.utcnow()` 弃用警告，后续可统一替换为 timezone-aware UTC 时间 |
 | 交付脚本 | 已存在 Windows/Linux 直接部署、Docker 部署、venv 初始化、engine/relay/venv 验证脚本 |
 | 真实上游触达 | 文档记录本地上游为 `https://yxai-api.nanfu.com`，占位令牌请求可触达上游并返回 401/403 类认证响应 |
 
@@ -77,14 +89,15 @@
 
 | 优先级 | 未完成项 | 影响 |
 |--------|----------|------|
-| P0 | 消息归档未实现 | 阶段 3 无法追溯 Chat prompt/response，后台查询无数据来源 |
+| P0 | 流式响应完整归档未实现 | 当前流式请求只归档 prompt、动作和 `{stream: true}` 响应占位，无法在后台回放完整流式回答 |
+| P0 | 正式归档/审计查询 API 未完成 | 目前只有最近观测 API，尚无 `/admin/api/archives`、`/admin/api/audits` 的正式分页、筛选和详情接口 |
+| P0 | 管理后台认证未实现 | `/admin/api/observations/recent` 已存在但尚未接 Basic Auth + IP 白名单，包含敏感原文，生产前必须补齐 |
+| P0 | 前端观测页面未实现 | 后端已有最近观测 API，但 `observations.html` 尚未创建，管理员暂不能通过页面查看样本 |
 | P1 | 文生图元数据归档未实现 | 阶段 3 无法沉淀文生图 prompt、参数和响应引用 |
 | P1 | 文生图图片本体异步归档未实现 | 阶段 8 无法提供图片资产预览/下载、存储配额和保留策略 |
-| P0 | 审计写入未实现 | block/warn/desensitize 命中事件不会进入 `audit_logs` |
 | P0 | R1~R9 schema 预留未完成 | 阶段 5/6/9 后续启用 APIKey、策略、审批、配额时仍需改 schema |
-| P1 | 管理后台认证和 API 未实现 | `admin/static/index.html` 只是静态骨架，不能查询归档和审计 |
 | P1 | 告警通知未实现 | 高风险拦截不会推送企微/飞书 |
-| P1 | 生产日志和审计脱敏链路未形成闭环 | 当前规则命中片段和请求侧手机号已做脱敏，后续归档/审计/告警路径尚未建立统一策略 |
+| P1 | 生产日志和告警脱敏链路未形成闭环 | 当前规则命中片段、请求侧手机号和审计 matched_snippet 已做脱敏，后续告警和管理员操作日志仍需统一策略 |
 
 ---
 
@@ -92,10 +105,10 @@
 
 ### 5.1 阶段口径
 
-- 当前阶段统一为：**阶段 3 — 归档 + 审计准备启动**。
+- 当前阶段统一为：**阶段 3 — 归档 + 审计数据闭环第一版**。
 - 阶段 1 统一判定为：**已完成**。
 - 阶段 2 统一判定为：**已完成**。
-- 阶段 3 统一判定为：**待开始**，直到归档、审计和 R1~R9 至少开始落地。
+- 阶段 3 统一判定为：**部分完成**，Chat 非流式归档/审计和最近观测 API 已落地；流式完整响应归档、正式查询 API、管理认证、前端观测页面、文生图元数据和 R1~R9 仍待完成。
 - 后续文档不再使用“旧阶段 0 / 旧阶段 1 第一批 / 第二批 / 第三批”表达，全部按新版 10 阶段路线图描述。
 
 ### 5.2 认证方案
@@ -113,7 +126,9 @@
 
 - 阶段 2 默认规则已收敛为弱扫描 MVP：手机号 desensitize + 5 条极保守关键词 block。
 - 当前 `engine/rules_config.yaml` 中保留 20 条关键词 + 10 条正则作为阶段 7 扩展规则基础，但除阶段 2 默认规则外均默认关闭。
-- 阶段 2 已补齐 desensitize 动作：命中手机号后替换 Chat `messages` 中对应文本，再转发脱敏后请求到上游，响应原样透传。
+- 阶段 2 已补齐 desensitize 动作：Chat 中 `user`、`tool`、`function` messages 的文本字段会在转发前执行手机号脱敏，`assistant`、`system`、`developer` 不脱敏，响应原样透传。
+- 阶段 2 的 Chat block 判定默认只扫描最新一条允许扫描 role 的有文本 message；允许 role 为 `user`、`tool`、`function`，`assistant`、`system`、`developer` 不参与 block 判定，用于覆盖普通用户输入和 Agent tool/function/file content 等尾部新增内容，并避免历史敏感词导致粘滞拦截。
+- 该 role 策略参考了主流 Agent 协议形态：OpenAI-compatible Chat Completions 工具结果回传为 `tool`，Claude Messages 工具结果回传在 `user` 的 `tool_result` content block 中，编码 Agent 通常把文件读取/命令输出追加到下一次模型请求。
 - 当前脱敏改写采用同一组手机号正则在 Chat 文本字段中递归替换，不直接使用合并扫描文本的 position 回写 JSON，避免多 message/content parts 偏移映射错误。
 
 ### 5.5 阶段 3 前置边界
@@ -134,14 +149,17 @@
 
 | 优先级 | 任务 | 目标产出 |
 |--------|------|----------|
-| P0 | 改造 `storage/models.py` | `MessageArchive` 增加 `prompt_original`、`prompt_desensitized`、`is_desensitized`；补齐 APIKey/策略/审批/配额预留表字段 |
-| P0 | 实现 `storage/archive.py` | ArchiveWriter + ArchiveReader；支持正常、拦截、脱敏、流式请求归档 |
-| P0 | 实现 `storage/audit.py` | AuditWriter + AuditReader；记录 pass/desensitize/warn/block 命中事件 |
-| P0 | 集成 relay 归档 | Chat 非流式与流式路径均写入归档，失败不影响主链路 |
-| P1 | 增加文生图元数据归档 | 记录 prompt、model、size、style、n、响应 URL 或 b64 存在状态、request_id、用户、时间；阶段 3 不保存图片本体 |
-| P0 | 集成 scanner/relay 审计 | 所有命中事件写入 audit_logs，失败降级放行或继续返回当前响应 |
-| P0 | 完成 R1~R9 预留 | Header 上游 Key 参数、ApiKeyRecord、SecurityPolicy、ApprovalChain、配额字段及相关测试 |
-| P0 | 增加阶段 3 测试 | `tests/test_archive.py`、`tests/test_audit.py`、`tests/test_models.py`、Header 可选 upstream key 分支 |
+| P0 | ✅ 改造 `storage/models.py` | `MessageArchive` 已增加 `prompt_original`、`prompt_desensitized`、`is_desensitized`、`action_taken`、`matched_rule_ids`、`image_metadata`；APIKey/策略/审批/配额预留仍待做 |
+| P0 | ✅ 实现 `storage/archive.py` | ArchiveWriter + ArchiveReader 已完成；支持正常、拦截、脱敏请求的归档，流式响应内容暂以 `{stream: true}` 占位 |
+| P0 | ✅ 实现 `storage/audit.py` | AuditWriter 已完成；记录 block/desensitize 等命中事件，pass 无命中时不写审计 |
+| P0 | ✅ 集成 relay 归档 | Chat 非流式路径已写入归档，失败不影响主链路；流式完整响应拼接仍待做 |
+| P0 | ✅ 增加上线临时观测 API | `/admin/api/observations/recent` 已完成，返回最近少量完整 Chat 样本；前端页面和管理认证仍待做 |
+| P0 | ⏳ 补齐管理认证 | 为 `/admin/api/*` 接入 Basic Auth + IP 白名单，尤其保护临时观测窗口中的敏感原文 |
+| P0 | ⏳ 增加临时观测前端页面 | 创建 `observations.html`，展示 role、原始/脱敏 messages、响应和命中动作 |
+| P0 | ⏳ 完成流式响应完整归档 | 改造 SSE 透传链路，收集完整响应后写入归档 |
+| P1 | ⏳ 增加文生图元数据归档 | 记录 prompt、model、size、style、n、响应 URL 或 b64 存在状态、request_id、用户、时间；阶段 3 不保存图片本体 |
+| P0 | ⏳ 完成 R1~R9 预留 | Header 上游 Key 参数、ApiKeyRecord、SecurityPolicy、ApprovalChain、配额字段及相关测试 |
+| P0 | 🟡 增加阶段 3 测试 | 已新增 `tests/test_archive.py`、`tests/test_audit.py`、`tests/test_observations.py` 和 relay 归档/审计测试；`tests/test_models.py`、Header 可选 upstream key 分支仍待补 |
 
 ### 6.2 后续批次概览
 
@@ -220,9 +238,9 @@ NF-SafetyHub/
 
 | 验证项 | 命令 | 当前结果 |
 |--------|------|----------|
-| 全量单元测试 | `.\.venv\Scripts\python.exe -m pytest` | 通过，34 passed |
-| 测试覆盖范围 | `tests/` | health、keyword、regex、scanner、fake_response、relay、header_policy、upstream_router、rules_config、rules_reload |
-| 代码结构检查 | 文件系统检查 | 未发现阶段 3/4/5/6/8/9/10 关键实现文件 |
+| 全量单元测试 | `python -m pytest` | 通过，43 passed |
+| 测试覆盖范围 | `tests/` | health、keyword、regex、scanner、fake_response、relay、header_policy、upstream_router、rules_config、rules_reload、archive、audit、observations |
+| 代码结构检查 | 文件系统检查 | 阶段 3 已新增 archive/audit/observations 关键实现；阶段 4 正式认证和前端页面、阶段 5/6/8/9/10 关键实现仍待补齐 |
 | IDE 诊断 | Trae/VS Code diagnostics | 无错误 |
 
 ---

@@ -4,6 +4,7 @@ from contextlib import suppress
 
 from fastapi import FastAPI
 
+from admin.router import router as admin_router
 from config import settings, validate_startup_settings
 from engine.rules_keyword import KeywordScanner
 from engine.rules_regex import RegexScanner
@@ -52,4 +53,5 @@ app = FastAPI(
 
 app.add_middleware(RequestIdMiddleware)
 app.include_router(health_router, prefix="/health", tags=["health"])
+app.include_router(admin_router, prefix="/admin/api", tags=["admin"])
 app.include_router(relay_router, prefix="/v1", tags=["relay"])
