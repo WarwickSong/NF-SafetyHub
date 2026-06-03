@@ -1,6 +1,8 @@
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+from config import Settings
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from admin.router import router
@@ -30,9 +32,13 @@ async def test_recent_observations_returns_role_and_desensitized_messages():
     app = FastAPI()
     app.include_router(router, prefix="/admin/api")
     app.state.archive_reader = ArchiveReader(session_factory)
+    app.state.settings = Settings(admin_password="strong-local-password")
 
     with TestClient(app) as client:
-        response = client.get("/admin/api/observations/recent")
+        response = client.get(
+            "/admin/api/observations/recent",
+            auth=("admin", "strong-local-password"),
+        )
 
     assert response.status_code == 200
     payload = response.json()

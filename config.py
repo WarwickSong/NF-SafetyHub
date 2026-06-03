@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     audit_retention_days: int = 365
     data_encryption_enabled: bool = False
     data_encryption_key_env: str = "SAFETYHUB_DATA_KEY"
+    key_provider_type: str = "passthrough"
+    key_provider_admin_token: str = ""
 
     admin_username: str = "admin"
     admin_password: str = ""

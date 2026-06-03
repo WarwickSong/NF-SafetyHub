@@ -1,4 +1,5 @@
 from copy import deepcopy
+import json
 import re
 from time import perf_counter
 from typing import Any
@@ -10,6 +11,7 @@ from fastapi.responses import Response, StreamingResponse
 
 from config import settings
 from engine.models import AggregatedScanResult
+from middleware.identity import RequestIdentity, require_request_identity
 from proxy.fake_response import generate_fake_response
 from proxy.header_policy import build_upstream_headers
 from proxy.stream import SSEStreamProxy
@@ -45,6 +47,8 @@ async def relay_openai_compatible(request: Request, upstream_path: str):
         raise HTTPException(status_code=404, detail="upstream path is required")
     path = f"/v1/{upstream_path}"
     body, raw_body = await _read_request_body(request, path)
+    capability = _infer_capability(path)
+    identity = await require_request_identity(request, body, capability)
     original_body = deepcopy(body) if isinstance(body, dict) else body
     is_stream = isinstance(body, dict) and bool(body.get("stream", False))
     scan_result: AggregatedScanResult | None = None
@@ -61,7 +65,7 @@ async def relay_openai_compatible(request: Request, upstream_path: str):
             if scan_result.blocked and isinstance(body, dict):
                 fake_response = await generate_fake_response(body, scan_result, is_stream)
                 await _write_chat_audit(request, scan_result, latest_scan_text, "blocked")
-                await _write_chat_archive(request, original_body, body, _response_archive_body(fake_response), scan_result, "blocked", is_stream, started_at)
+                await _write_chat_archive(request, original_body, body, _response_archive_body(fake_response), scan_result, "blocked", is_stream, started_at, identity)
                 return fake_response
         if isinstance(body, dict):
             desensitized_body = desensitize_chat_request_body(body)
@@ -69,11 +73,27 @@ async def relay_openai_compatible(request: Request, upstream_path: str):
             body = desensitized_body
 
     upstream_router = getattr(request.app.state, "upstream_router", None) or get_default_upstream_router()
-    response = await _relay_to_upstream(request, path, body, raw_body, is_stream, upstream_router)
+    action_taken = _action_from_scan_result(scan_result, was_desensitized) if path == CHAT_COMPLETIONS_PATH else "passed"
     if path == CHAT_COMPLETIONS_PATH:
-        action_taken = _action_from_scan_result(scan_result, was_desensitized)
         await _write_chat_audit(request, scan_result, latest_scan_text, action_taken)
-        await _write_chat_archive(request, original_body, body, _response_archive_body(response), scan_result, action_taken, is_stream, started_at)
+    response = await _relay_to_upstream(
+        request,
+        path,
+        body,
+        raw_body,
+        is_stream,
+        upstream_router,
+        original_body,
+        scan_result,
+        action_taken,
+        started_at,
+        identity,
+        capability,
+    )
+    if path == CHAT_COMPLETIONS_PATH and not is_stream:
+        await _write_chat_archive(request, original_body, body, _response_archive_body(response), scan_result, action_taken, is_stream, started_at, identity)
+    elif path.startswith("/v1/images/"):
+        await _write_image_archive(request, original_body, response, started_at, identity)
     return response
 
 
@@ -84,20 +104,37 @@ async def _relay_to_upstream(
     raw_body: bytes,
     is_stream: bool,
     upstream_router: UpstreamRouter,
+    original_body: Any = None,
+    scan_result: AggregatedScanResult | None = None,
+    action_taken: str = "passed",
+    started_at: float = 0,
+    identity: RequestIdentity | None = None,
+    capability: str = "chat",
 ):
     if not settings.upstream_url:
         raise HTTPException(status_code=503, detail="upstream_url is not configured")
     model = body.get("model") if isinstance(body, dict) else None
-    route = upstream_router.resolve(model=model, capability=_infer_capability(path))
+    route = upstream_router.resolve(model=model, capability=capability)
     url = _append_query_string(route.build_url(path), request.url.query)
-    headers = build_upstream_headers(request.headers, getattr(request.state, "request_id", None))
+    upstream_api_key = identity.upstream_api_key if identity and identity.upstream_api_key else None
+    headers = build_upstream_headers(request.headers, getattr(request.state, "request_id", None), upstream_api_key)
     timeout = httpx.Timeout(connect=route.timeout_connect, read=route.timeout_read, write=route.timeout_connect, pool=route.timeout_connect)
     if is_stream and request.method in JSON_BODY_METHODS and isinstance(body, dict):
         client = httpx.AsyncClient(timeout=timeout)
-        return StreamingResponse(
-            _stream_with_client_close(client, request.method, url, headers, body),
-            media_type="text/event-stream",
-        )
+        stream = _stream_with_archive(
+            client,
+            request.method,
+            url,
+            headers,
+            body,
+            request,
+            original_body,
+            scan_result,
+            action_taken,
+            started_at,
+            identity,
+        ) if path == CHAT_COMPLETIONS_PATH else _stream_with_client_close(client, request.method, url, headers, body)
+        return StreamingResponse(stream, media_type="text/event-stream")
     async with httpx.AsyncClient(timeout=timeout) as client:
         request_kwargs: dict[str, Any] = {"headers": headers}
         if request.method in JSON_BODY_METHODS:
@@ -121,6 +158,30 @@ async def _stream_with_client_close(
             yield chunk
     finally:
         await client.aclose()
+
+
+async def _stream_with_archive(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    body: dict[str, Any],
+    request: Request,
+    original_body: Any,
+    scan_result: AggregatedScanResult | None,
+    action_taken: str,
+    started_at: float,
+    identity: RequestIdentity | None = None,
+):
+    chunks: list[bytes] = []
+    try:
+        async for chunk in SSEStreamProxy.proxy_stream(client, method, url, headers, body):
+            chunks.append(chunk)
+            yield chunk
+    finally:
+        await client.aclose()
+        response_body = _stream_archive_body(chunks)
+        await _write_chat_archive(request, original_body, body, response_body, scan_result, action_taken, True, started_at, identity)
 
 
 def _build_response(upstream_response: httpx.Response) -> Response:
@@ -156,6 +217,44 @@ def _response_archive_body(response: Response | StreamingResponse) -> Any:
     return {"media_type": media_type, "content": content}
 
 
+def _stream_archive_body(chunks: list[bytes]) -> dict[str, Any]:
+    raw_content = b"".join(chunks).decode("utf-8", errors="replace")
+    return {
+        "stream": True,
+        "media_type": "text/event-stream",
+        "content": raw_content,
+        "message_content": _extract_sse_message_content(raw_content),
+    }
+
+
+def _extract_sse_message_content(raw_content: str) -> str:
+    parts: list[str] = []
+    normalized_content = raw_content.replace("\\r\\n", "\n").replace("\\n", "\n")
+    for line in normalized_content.splitlines():
+        if not line.startswith("data:"):
+            continue
+        payload = line.removeprefix("data:").strip()
+        if not payload or payload == "[DONE]":
+            continue
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        choices = data.get("choices") if isinstance(data, dict) else None
+        if not isinstance(choices, list):
+            continue
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            delta = choice.get("delta")
+            if isinstance(delta, dict) and isinstance(delta.get("content"), str):
+                parts.append(delta["content"])
+            message = choice.get("message")
+            if isinstance(message, dict) and isinstance(message.get("content"), str):
+                parts.append(message["content"])
+    return "".join(parts)
+
+
 async def _write_chat_archive(
     request: Request,
     original_body: Any,
@@ -165,6 +264,7 @@ async def _write_chat_archive(
     action_taken: str,
     is_stream: bool,
     started_at: float,
+    identity: RequestIdentity | None = None,
 ) -> None:
     if not isinstance(original_body, dict):
         return
@@ -176,6 +276,8 @@ async def _write_chat_archive(
         await writer.write(
             ArchivePayload(
                 request_id=request_id,
+                user_id=identity.user_id if identity else "",
+                api_key_id=identity.api_key_id if identity else "",
                 model=original_body.get("model", ""),
                 capability="chat",
                 prompt_original=original_body.get("messages", []),
@@ -194,6 +296,77 @@ async def _write_chat_archive(
         return
 
 
+async def _write_image_archive(
+    request: Request,
+    original_body: Any,
+    response: Response | StreamingResponse,
+    started_at: float,
+    identity: RequestIdentity | None = None,
+) -> None:
+    if not isinstance(original_body, dict) or isinstance(response, StreamingResponse):
+        return
+    try:
+        request_id = getattr(request.state, "request_id", "")
+        writer = getattr(request.app.state, "archive_writer", None) or ArchiveWriter()
+        metadata = _build_image_metadata(original_body, response)
+        await writer.write(
+            ArchivePayload(
+                request_id=request_id,
+                user_id=identity.user_id if identity else "",
+                api_key_id=identity.api_key_id if identity else "",
+                model=original_body.get("model", ""),
+                capability="image",
+                prompt_original=original_body.get("prompt", ""),
+                prompt_desensitized=original_body.get("prompt", ""),
+                response=_response_archive_body(response),
+                image_metadata=metadata,
+                latency_ms=int((perf_counter() - started_at) * 1000),
+            )
+        )
+    except Exception:
+        return
+
+
+def _build_image_metadata(request_body: dict[str, Any], response: Response) -> dict[str, Any]:
+    response_payload = _parse_response_json(response)
+    references = _extract_image_response_references(response_payload)
+    return {
+        "prompt": request_body.get("prompt", ""),
+        "model": request_body.get("model", ""),
+        "size": request_body.get("size", ""),
+        "style": request_body.get("style", ""),
+        "n": request_body.get("n", 1),
+        "response_url_count": len(references["urls"]),
+        "response_urls": references["urls"],
+        "response_b64_count": references["b64_count"],
+        "response_b64_present": references["b64_count"] > 0,
+    }
+
+
+def _parse_response_json(response: Response) -> Any:
+    content = response.body.decode("utf-8", errors="replace") if isinstance(response.body, bytes) else response.body
+    try:
+        return json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        return None
+
+
+def _extract_image_response_references(payload: Any) -> dict[str, Any]:
+    urls: list[str] = []
+    b64_count = 0
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, list):
+        return {"urls": urls, "b64_count": b64_count}
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        if isinstance(item.get("url"), str):
+            urls.append(item["url"])
+        if isinstance(item.get("b64_json"), str) and item["b64_json"]:
+            b64_count += 1
+    return {"urls": urls, "b64_count": b64_count}
+
+
 async def _write_chat_audit(
     request: Request,
     scan_result: AggregatedScanResult | None,
@@ -209,6 +382,7 @@ async def _write_chat_audit(
                 request_id=getattr(request.state, "request_id", ""),
                 scan_result=scan_result,
                 action_taken=action_taken,
+                user_id=getattr(getattr(request.state, "identity", None), "user_id", ""),
                 scanned_text=scanned_text,
             )
         )

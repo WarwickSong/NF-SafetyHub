@@ -6,128 +6,92 @@
 
 ## 一、项目目录结构
 
-```
-safetyhub/
-├── main.py                          # FastAPI 应用入口
-├── config.py                        # 配置加载（YAML + 环境变量 + 热加载）
-├── dependencies.py                  # FastAPI 依赖注入
-│
-├── proxy/                           # [核心层] 中继与伪装
+当前代码结构如下；KeyProvider、告警、图片资产、文件安全等后续阶段模块在对应阶段创建。
+
+```text
+NF-SafetyHub/
+├── main.py
+├── config.py
+├── dependencies.py
+├── proxy/
+│   ├── relay.py
+│   ├── fake_response.py
+│   ├── header_policy.py
+│   ├── upstream_router.py
+│   └── stream.py
+├── engine/
+│   ├── base.py
+│   ├── models.py
+│   ├── normalizer.py
+│   ├── rules_config.yaml
+│   ├── rules_keyword.py
+│   ├── rules_regex.py
+│   └── scanner.py
+├── governance/
 │   ├── __init__.py
-│   ├── relay.py                     # 核心中继转发引擎
-│   ├── fake_response.py             # 伪装回复生成器
-│   ├── header_policy.py             # Header 透传/剥离策略
-│   ├── upstream_router.py           # APIKey/模型到上游的路由预留
-│   └── stream.py                    # SSE 流式处理工具
-│
-├── engine/                          # [检测层] 安全扫描引擎
-│   ├── __init__.py
-│   ├── scanner.py                   # 扫描器调度引擎（链式调用）
-│   ├── base.py                      # Scanner 抽象基类
-│   ├── normalizer.py                # 文本归一化与绕过防护
-│   ├── rules_keyword.py             # 关键词规则 Scanner
-│   ├── rules_regex.py               # 正则规则 Scanner
-│   ├── rules_config.yaml            # 规则配置文件
-│   └── models.py                    # ScannerResult 等数据模型
-│
-├── governance/                      # [治理层] 身份、权限、配额与审批预留
-│   ├── __init__.py
-│   ├── identity.py                  # 用户/APIKey 身份解析
-│   ├── api_keys.py                  # APIKey 元数据与权限预留
-│   ├── key_provider.py              # KeyProvider 抽象基类 + 工厂（阶段 3 预留接口，阶段 6 启用）
-│   ├── providers/                   # 中转站 Key 适配器（阶段 6 启用）
-│   │   ├── __init__.py
-│   │   ├── passthrough.py           # 阶段 1~5 默认占位实现，等价于不做映射
-│   │   ├── static_key.py            # 静态 Key 提供者
-│   │   ├── oneapi.py                # OneAPI/OneHub 适配器
-│   │   └── openai_compat.py         # OpenAI 兼容协议适配器
-│   ├── quota.py                     # F20 配额与速率限制（阶段 3 预留 schema，阶段 10 启用）
-│   ├── security_policy.py           # F18 Key 级安全策略（阶段 3 预留 schema，阶段 9 启用）
-│   ├── approval_chain.py            # F19 审批链路由（阶段 3 预留 schema，阶段 9 启用）
-│   ├── approval_scheduler.py        # F19 审批超时扫描器（阶段 9 启用）
-│   ├── model_policy.py              # 模型访问策略预留
-│   └── approval.py                  # 临时放行审批流程预留
-│
-├── file_security/                   # [文件安全] 上传文件解析与检测预留
-│   ├── __init__.py
-│   ├── extractor.py                 # PDF/Office/TXT 等文本抽取
-│   ├── sanitizer.py                 # 文件内容脱敏与重写预留
-│   └── router.py                    # 文件上传/解析接口预留
-│
-├── observability/                   # [可观测性] 健康检查、指标与追踪
-│   ├── __init__.py
-│   ├── health.py                    # live/ready 健康检查
-│   ├── metrics.py                   # 请求、扫描、上游、告警指标
-│   └── request_id.py                # X-Request-ID 生成与透传
-│
-├── storage/                         # [存储层] 数据持久化
-│   ├── __init__.py
-│   ├── database.py                  # 异步数据库连接管理
-│   ├── migrations/                  # 数据库迁移脚本
-│   ├── models.py                    # SQLAlchemy ORM 模型
-│   ├── archive.py                   # 消息归档与文生图元数据归档 CRUD
-│   ├── audit.py                     # 审计日志 CRUD
-│   ├── image_assets.py              # 文生图图片本体异步归档与资产记录（阶段 8）
-│   ├── retention.py                 # 数据保留与清理任务
-│   └── admin_ops.py                 # 管理员操作审计 CRUD
-│
-├── admin/                           # [管理层] 管理后台
-│   ├── __init__.py
-│   ├── router.py                    # 管理后台 API 路由
-│   ├── schemas.py                   # Pydantic 请求/响应模型
-│   └── static/                      # 管理员前端静态文件
-│       ├── index.html               # 仪表盘
-│       ├── blocks.html              # 拦截记录
-│       ├── archives.html            # 消息归档
-│       ├── image_assets.html        # 文生图资产元数据与图片预览/下载（阶段 8 增强）
-│       ├── rules.html               # 规则管理
-│       ├── approvals.html           # 临时审批记录预留
-│       ├── api_keys.html            # APIKey/模型权限管理预留
-│       ├── settings.html            # 系统设置
-│       ├── css/
-│       │   └── style.css
-│       └── js/
-│           └── app.js
-│
-├── notify/                          # [通知层] 告警推送
-│   ├── __init__.py
-│   ├── webhook.py                   # 企微/飞书 Webhook 推送
-│   ├── approval_webhook.py          # 交互式审批通知预留
-│   └── rate_limiter.py              # 告警频率控制
-│
-├── middleware/                      # [中间件层]
-│   ├── __init__.py
-│   ├── auth.py                      # 管理后台认证
-│   ├── identity.py                  # 用户/APIKey 身份注入
-│   ├── request_limit.py             # 请求大小与并发限制
-│   ├── logging.py                   # 请求日志（脱敏）
-│   └── error_handler.py             # 全局异常处理
-│
-├── tests/                           # [测试]
-│   ├── __init__.py
-│   ├── conftest.py                  # pytest fixtures
-│   ├── test_relay.py                # 中继转发测试
-│   ├── test_scanner.py              # 扫描引擎测试
-│   ├── test_keyword.py              # 关键词规则测试
-│   ├── test_regex.py                # 正则规则测试
-│   ├── test_archive.py              # 消息归档测试
-│   ├── test_fake_response.py        # 伪装回复测试
-│   ├── test_audit.py                # 审计日志测试
-│   ├── test_webhook.py              # 告警推送测试
-│   └── test_e2e.py                  # 端到端集成测试
-│
-├── nginx/                           # [部署] Nginx 配置
-│   ├── nginx.conf
-│   └── ssl/                         # TLS 证书（.gitignore）
-│
-├── scripts/                         # [运维] 辅助脚本
-│   ├── init_db.py                   # 数据库初始化
-│   └── seed_rules.py                # 规则种子数据
-│
+│   └── api_keys.py
+├── file_security/
+│   └── __init__.py
+├── observability/
+│   ├── health.py
+│   └── request_id.py
+├── storage/
+│   ├── migrations/
+│   ├── admin_ops.py
+│   ├── archive.py
+│   ├── audit.py
+│   ├── database.py
+│   └── models.py
+├── admin/
+│   ├── router.py
+│   ├── schemas.py
+│   └── static/
+│       ├── api_keys.html
+│       ├── approvals.html
+│       ├── archives.html
+│       ├── blocks.html
+│       ├── index.html
+│       ├── login.html
+│       ├── observations.html
+│       ├── rules.html
+│       ├── settings.html
+│       ├── css/style.css
+│       └── js/app.js
+├── middleware/
+│   ├── auth.py
+│   └── identity.py
+├── notify/
+│   └── __init__.py
+├── nginx/
+│   └── nginx.conf
+├── scripts/
+│   └── init_db.py
+├── tests/
+│   ├── test_admin_auth.py
+│   ├── test_admin_stage4.py
+│   ├── test_api_keys.py
+│   ├── test_archive.py
+│   ├── test_audit.py
+│   ├── test_fake_response.py
+│   ├── test_header_policy.py
+│   ├── test_health.py
+│   ├── test_keyword.py
+│   ├── test_models.py
+│   ├── test_observations.py
+│   ├── test_regex.py
+│   ├── test_relay.py
+│   ├── test_rules_config.py
+│   ├── test_rules_reload.py
+│   ├── test_scanner.py
+│   └── test_upstream_router.py
+├── verify/
+├── 交付运行手册/
+├── 产品研发控制/
 ├── Dockerfile
 ├── docker-compose.yml
 ├── Makefile
 ├── requirements.txt
+├── pytest.ini
 ├── .env.example
 ├── .gitignore
 └── README.md
@@ -756,8 +720,6 @@ class ApiKeyRecord(Base):
     owner_department = Column(String(128), nullable=True, index=True)
     cost_center = Column(String(64), nullable=True, index=True)
     status = Column(String(16), default="active", index=True)
-    allowed_models = Column(Text, nullable=True)
-    allowed_capabilities = Column(Text, nullable=True)
     # ---- v1.1 中转站映射字段（v1.0 仅建表，不写入） ----
     provider_name = Column(String(64), nullable=False, default="passthrough")
     upstream_route_id = Column(String(64), nullable=True)
@@ -768,17 +730,10 @@ class ApiKeyRecord(Base):
     # False: K-Sync（safetyhub_key 与 upstream_key 一致，默认）
     # True:  K-Decoupled（中转站 Key 已被替换或独立生成，与前哨站 Key 解耦）
     is_decoupled = Column(Boolean, default=False, index=True)
-    # ---- v1.1 F20 细粒度配额与速率限制（v1.0 仅建字段，NULL 表示无限制） ----
-    model_quotas = Column(Text, nullable=True)
-    capability_quotas = Column(Text, nullable=True)
-    rate_limits = Column(Text, nullable=True)
-    usage_snapshot = Column(Text, nullable=True)
     # ---- v1.2 F18/F19 Key 级安全策略与审批链关联（v1.0 仅建字段，NULL 表示走全局） ----
     security_policy_id = Column(String(64), nullable=True, index=True)
     approval_chain_id = Column(String(64), nullable=True, index=True)
-    # ---- 总配额与生命周期 ----
-    quota_total = Column(Integer, default=0)
-    quota_used = Column(Integer, default=0)
+    # ---- 生命周期 ----
     created_at = Column(DateTime, server_default=func.now(), index=True)
     expires_at = Column(DateTime, nullable=True)
     revoked_at = Column(DateTime, nullable=True)
@@ -1292,25 +1247,25 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 | 模块 | 职责 | v1.0 行为 | 后续启用方向 |
 |------|------|-----------|--------------|
 | `identity.py` | 解析用户、APIKey、来源 IP、客户端标识 | 统一生成 `RequestContext`，写入日志/归档/审计 | 接入企业 SSO、JWT claims、APIKey 归属映射 |
-| `api_keys.py` | APIKey 元数据、状态、所属用户/部门 | 只存储哈希和只读占位，不做复杂授权 | 支持 APIKey 启停、额度、模型 allowlist |
+| `api_keys.py` | APIKey 元数据、状态、所属用户/部门、上游 Key 映射 | 只存储哈希、前后缀和加密 upstream_key，不做资源授权 | 支持 APIKey 启停、吊销、过期、上游 Key 替换 |
 | `key_provider.py` | KeyProvider 抽象基类与工厂 | 仅定义接口，默认走 `passthrough` 占位 | 工厂根据 `key_provider_type` 实例化具体 Provider |
 | `providers/passthrough.py` | 默认占位实现 | 所有方法抛 `NotImplementedError` 或返回空 | 始终保留作为 fallback |
 | `providers/static_key.py` | 静态 Key 提供者 | 不实现 | 从配置读取中转站 Key，绑定时手动选择 |
 | `providers/oneapi.py` | OneAPI/OneHub 适配器 | 不实现 | 调用 `/api/token` 创建/吊销 |
 | `providers/openai_compat.py` | OpenAI 兼容协议适配器 | 不实现 | 调用 `/v1/api-keys` 接口 |
-| `quota.py` | F20 配额与速率限制 | 不实现 | 阶段 10 启用，提供 check_quota / check_rate_limit / update_usage |
+| `quota.py` | F20 中转站配额与速率观测 | 不实现 | 如 Provider 支持，阶段 10 只读查询或跳转中转站，不提供本地配额/速率拦截 |
 | `security_policy.py` | F18 Key 级安全策略 | 不实现 | 阶段 9 启用，提供 load/inheritance/apply_overrides |
 | `approval_chain.py` | F19 审批链路由 | 不实现 | 阶段 9 启用，提供 resolve_approver / on_approval_decision / on_timeout |
 | `approval_scheduler.py` | F19 审批超时扫描器 | 不实现 | 阶段 9 启用，定时扫描超时审批请求 |
-| `model_policy.py` | 模型权限策略 | 默认允许配置中的模型集合 | 支持按用户/APIKey/部门控制模型、上下文长度、工具调用 |
+| `upstream_permission_view.py` | 中转站资源权限只读引用 | 不实现 | 如中转站开放接口，仅展示或跳转中转站侧模型/token/能力权限配置 |
 | `approval.py` | 临时审批流程 | 预留数据模型和接口，不阻塞主链路 | 支持敏感请求人工审批后一次性放行 |
 
 **预留原则**
 
-- APIKey 永不明文入库，只存哈希、前后缀展示、创建时间、状态、归属信息
-- 模型权限采用 `user_id + api_key_id + model + capability` 四元组预留，避免后续重构
-- capability 至少预留 `chat`、`vision`、`file_upload`、`function_call`、`mcp_tool`、`reasoning`、`embedding`
-- 阶段 1~4 不实现复杂权限决策，但 `RequestContext`、数据库字段和审计字段必须提前带上 `api_key_id`、`model`、`capability`
+- APIKey 永不明文入库，只存哈希、前后缀展示、创建时间、状态、归属信息和加密后的 upstream_key
+- 模型权限、token 额度、速率限制和资源能力权限由中转站作为权威系统管理，SafetyHub 不预留本地权限字段
+- SafetyHub 可在 `RequestContext`、归档和审计中记录 `api_key_id`、`model`、`capability`，用于安全治理、追溯和告警，不用于资源授权判定
+- 阶段 1~4 不实现复杂权限决策，阶段 5 只启用 APIKey 有效性校验和上游 Key 映射
 
 #### 2.11.1 `governance/key_provider.py` — KeyProvider 抽象层
 
@@ -1324,16 +1279,13 @@ class UpstreamKeyInfo:
     key_id: str                       # 中转站侧的 Key ID
     key_prefix: str                   # 前后缀拼接，例如 "sk-ab...wxyz"
     key_secret: str | None            # 完整 Key（仅 create 时返回，不持久化明文）
-    model_allowlist: list[str]
     metadata: dict
 
 
 @dataclass
 class KeyCreateParams:
     name: str
-    model_allowlist: list[str] | None = None
-    capability_allowlist: list[str] | None = None
-    quota: int | None = None
+    owner_user_id: str
     expires_at: str | None = None
     metadata: dict | None = None
 
@@ -1421,7 +1373,7 @@ def create_key_provider(provider_type: str, **kwargs) -> KeyProvider:
 
 | 改动 ID | 文件 | 改动内容 | 关联功能 | 兼容性保证 |
 |--------|------|---------|---------|-----------|
-| **R6** | `storage/models.py` | `ApiKeyRecord` 新增 4 个 F20 字段：`model_quotas`、`capability_quotas`、`rate_limits`、`usage_snapshot`（全部 NULL 默认） | F20 | NULL 表示无限制，与 v1.0 透传行为一致 |
+| **R6** | `storage/models.py` | 明确 `ApiKeyRecord` 不新增 F20 模型配额、能力配额、速率限制和用量快照字段 | F20 | 资源权限与配额由中转站作为权威系统管理，SafetyHub schema 不污染 |
 | **R7** | `storage/models.py` | `ApiKeyRecord` 新增 2 个 F18/F19 字段：`security_policy_id`、`approval_chain_id`；`MessageArchive`、`AuditLog` 新增 `security_policy_id` 字段；`ApprovalRequest` 新增 `chain_id`、`current_level`、`escalated_at` 字段；`ApiKeyRecord` 新增 `cost_center` 字段 | F18 / F19 | 全部 NULL 默认，老数据无需回填 |
 | **R8** | `storage/models.py` | 新增 `SecurityPolicy` 与 `ApprovalChain` 两张 ORM 表，随 `create_all` 自动建表 | F18 / F19 | 表存在但无人写入，零影响 |
 
@@ -1462,20 +1414,19 @@ def create_key_provider(provider_type: str, **kwargs) -> KeyProvider:
 
 > **关键**：审批链是阶段 9 新增的能力，所以"审批链"和"审批"是同时新增的，不存在改造已稳定代码的问题。
 
-#### 2.11.7 阶段 10 启用 F20 配额与速率限制流程
+#### 2.11.7 阶段 10 启用 F20 中转站配额与速率观测流程
 
 ```
-1. 实现 governance/quota.py：
-   ├─ check_quota(api_key, model, capability, request_tokens) → bool
-   ├─ check_rate_limit(api_key) → bool（滑动窗口）
-   └─ update_usage(api_key, model, completion_tokens) → 异步累加
-2. 修改 proxy/relay.py：
-   ├─ 请求进入时调用 check_quota / check_rate_limit
-   └─ 请求结束时异步调用 update_usage（不阻塞响应）
-3. 增强 admin/static/api_keys.html：配额与速率限制配置 UI
+1. 扩展 KeyProvider 可选查询能力：
+   ├─ get_key_quota_status(api_key_id) → 中转站配额/速率状态
+   └─ get_key_permission_url(api_key_id) → 中转站控制台跳转链接
+2. 修改 admin/api/api-keys：
+   ├─ Provider 支持时返回只读 quota_status 或 permission_url
+   └─ Provider 不支持时显示“由中转站管理”
+3. 增强 admin/static/api_keys.html：只读展示资源权限状态或跳转中转站控制台
 ```
 
-> **关键**：配额检查在 relay 边界进行，不进入 scanner 内部；超额返回 429，不消耗中转站配额。
+> **关键**：模型权限、token 额度、速率限制和资源能力权限由中转站作为权威系统管理，SafetyHub 不实现本地配额检查，也不在 `api_keys` 表保存配额字段。
 
 ### 2.12 `file_security/` — 文件上传安全预留
 

@@ -32,13 +32,22 @@ class HeaderPolicy:
     def __init__(self, blocked_headers: set[str] | None = None):
         self._blocked_headers = {header.lower() for header in (blocked_headers or set())}
 
-    def build_upstream_headers(self, headers: Mapping[str, str], request_id: str | None = None) -> dict[str, str]:
+    def build_upstream_headers(
+        self,
+        headers: Mapping[str, str],
+        request_id: str | None = None,
+        upstream_api_key: str | None = None,
+    ) -> dict[str, str]:
         upstream_headers: dict[str, str] = {}
         for name, value in headers.items():
             normalized_name = name.lower()
             if self._should_strip(normalized_name):
                 continue
+            if upstream_api_key is not None and normalized_name == "authorization":
+                continue
             upstream_headers[name] = value
+        if upstream_api_key is not None:
+            upstream_headers["Authorization"] = f"Bearer {upstream_api_key}"
         if request_id:
             upstream_headers["X-Request-ID"] = request_id
         return upstream_headers
@@ -53,5 +62,9 @@ class HeaderPolicy:
         return normalized_name.startswith(INTERNAL_HEADER_PREFIXES)
 
 
-def build_upstream_headers(headers: Mapping[str, str], request_id: str | None = None) -> dict[str, str]:
-    return HeaderPolicy().build_upstream_headers(headers, request_id)
+def build_upstream_headers(
+    headers: Mapping[str, str],
+    request_id: str | None = None,
+    upstream_api_key: str | None = None,
+) -> dict[str, str]:
+    return HeaderPolicy().build_upstream_headers(headers, request_id, upstream_api_key)

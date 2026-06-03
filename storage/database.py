@@ -14,7 +14,7 @@ async def init_db() -> None:
     _ensure_sqlite_parent_dir()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        await _ensure_sqlite_archive_columns(conn)
+        await _ensure_sqlite_legacy_columns(conn)
 
 
 async def close_db() -> None:
@@ -25,25 +25,53 @@ def get_session_factory() -> async_sessionmaker:
     return SessionLocal
 
 
-SQLITE_MESSAGE_ARCHIVE_COLUMNS = {
-    "prompt_original": "TEXT DEFAULT ''",
-    "prompt_desensitized": "TEXT DEFAULT ''",
-    "is_desensitized": "BOOLEAN DEFAULT 0",
-    "action_taken": "VARCHAR(32) DEFAULT 'passed'",
-    "matched_rule_ids": "TEXT DEFAULT ''",
-    "image_metadata": "TEXT DEFAULT ''",
+SQLITE_LEGACY_COLUMNS = {
+    "message_archives": {
+        "prompt_original": "TEXT DEFAULT ''",
+        "prompt_desensitized": "TEXT DEFAULT ''",
+        "is_desensitized": "BOOLEAN DEFAULT 0",
+        "action_taken": "VARCHAR(32) DEFAULT 'passed'",
+        "matched_rule_ids": "TEXT DEFAULT ''",
+        "image_metadata": "TEXT DEFAULT ''",
+        "security_policy_id": "VARCHAR(64) DEFAULT NULL",
+    },
+    "audit_logs": {
+        "approval_id": "VARCHAR(64) DEFAULT NULL",
+        "security_policy_id": "VARCHAR(64) DEFAULT NULL",
+    },
+    "api_keys": {
+        "key_prefix": "VARCHAR(16) DEFAULT ''",
+        "key_suffix": "VARCHAR(8) DEFAULT ''",
+        "name": "VARCHAR(128) DEFAULT ''",
+        "owner_user_id": "VARCHAR(128) DEFAULT ''",
+        "owner_department": "VARCHAR(128) DEFAULT NULL",
+        "cost_center": "VARCHAR(64) DEFAULT NULL",
+        "status": "VARCHAR(16) DEFAULT 'active'",
+        "provider_name": "VARCHAR(64) DEFAULT 'passthrough'",
+        "upstream_route_id": "VARCHAR(64) DEFAULT NULL",
+        "upstream_key_id": "VARCHAR(128) DEFAULT NULL",
+        "upstream_key_prefix": "VARCHAR(16) DEFAULT NULL",
+        "upstream_key_encrypted": "TEXT DEFAULT NULL",
+        "is_decoupled": "BOOLEAN DEFAULT 0",
+        "security_policy_id": "VARCHAR(64) DEFAULT NULL",
+        "approval_chain_id": "VARCHAR(64) DEFAULT NULL",
+        "created_at": "DATETIME DEFAULT CURRENT_TIMESTAMP",
+        "expires_at": "DATETIME DEFAULT NULL",
+        "revoked_at": "DATETIME DEFAULT NULL",
+    },
 }
 
 
-async def _ensure_sqlite_archive_columns(conn) -> None:
+async def _ensure_sqlite_legacy_columns(conn) -> None:
     if not settings.db_url.startswith("sqlite+aiosqlite:///"):
         return
-    rows = await conn.execute(text("PRAGMA table_info(message_archives)"))
-    existing_columns = {row[1] for row in rows.fetchall()}
-    for column_name, column_definition in SQLITE_MESSAGE_ARCHIVE_COLUMNS.items():
-        if column_name in existing_columns:
-            continue
-        await conn.execute(text(f"ALTER TABLE message_archives ADD COLUMN {column_name} {column_definition}"))
+    for table_name, columns in SQLITE_LEGACY_COLUMNS.items():
+        rows = await conn.execute(text(f"PRAGMA table_info({table_name})"))
+        existing_columns = {row[1] for row in rows.fetchall()}
+        for column_name, column_definition in columns.items():
+            if column_name in existing_columns:
+                continue
+            await conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}"))
 
 
 def _ensure_sqlite_parent_dir() -> None:

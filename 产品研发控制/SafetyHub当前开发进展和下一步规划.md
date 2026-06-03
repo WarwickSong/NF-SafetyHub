@@ -1,16 +1,18 @@
 # LLM-SafetyHub 当前开发进展和下一步规划
 
-> 更新时间：2026-06-02  
-> 当前阶段：阶段 3 — 归档 + 审计数据闭环第一版  
-> 当前状态：阶段 1 OpenAI-compatible `/v1/*` 透传中继与健康检查已完成；阶段 2 弱扫描 MVP 已完成；阶段 3 已完成 Chat 归档/审计数据闭环第一版，包含 MessageArchive 字段扩展、ArchiveWriter、AuditWriter、relay 接入、最近对话观测 API 和测试覆盖；流式响应完整拼接归档、正式管理后台认证和前端观测页面仍待完成。
+> 更新时间：2026-06-04  
+> 当前阶段：阶段 6 — KeyProvider + 中转站联通准备启动  
+> 当前状态：阶段 1 OpenAI-compatible `/v1/*` 透传中继与健康检查已完成；阶段 2 弱扫描 MVP 已完成；阶段 3 归档 + 审计已完成；阶段 4 管理员认证 + 最小后台框架已完成；阶段 5 APIKey 管理已完成，包含 K-Sync 默认、加密存储、identity 中间件、后台 CRUD、单条/CSV 批量替换上游 Key 和管理员操作审计。APIKey 的模型权限、token 额度、资源能力权限统一由中转站作为权威系统管理，SafetyHub 只做安全治理和上游 Key 映射。
 
 ---
 
 ## 一、实际代码状态
 
-本状态基于当前仓库代码检查与测试结果。当前代码已经具备 FastAPI 应用入口、健康检查、Request ID、OpenAI-compatible `/v1/*` 通用中继转发、Header 安全透传、单上游路由、Scanner 调度、关键词/正则扫描、block 拦截伪装回复、请求侧手机号脱敏改写转发、基础 SSE 透传工具、规则定时热加载、静态后台首页骨架、Chat 归档/审计写入、最近对话观测 API 和 SQLite 旧表缺列补齐能力。
+本状态基于当前仓库代码检查与测试结果。当前代码已经具备 FastAPI 应用入口、健康检查、Request ID、OpenAI-compatible `/v1/*` 通用中继转发、Header 安全透传、单上游路由、Scanner 调度、关键词/正则扫描、block 拦截伪装回复、请求侧手机号脱敏改写转发、SSE 透传与完整流式归档、规则定时热加载、管理后台规则启停和手动热加载、管理 API 和静态页面 Basic Auth + IP 白名单、Chat 归档/审计写入、正式归档/审计分页筛选和详情 API、统计概览 API、管理员操作审计、最小静态后台、文生图元数据归档、最近对话观测 API、SQLite 旧表缺列补齐、R1~R9 schema 预留和 timezone-aware UTC 时间字段。
 
-当前代码尚未具备流式响应完整拼接归档、文生图元数据归档、文生图图片本体异步归档、APIKey schema 预留、正式归档/审计查询 API、管理后台认证、前端观测页面、告警通知、文件安全、KeyProvider、审批链和配额能力。
+阶段 5 已新增 `governance/api_keys.py`、`middleware/identity.py`、后台 APIKey CRUD 接口和 `admin/static/api_keys.html` 可操作页面。SafetyHub 当前支持管理员手动录入已有中转站 Key，默认以 K-Sync 模式保存；数据库仅保存哈希、前后缀和加密后的上游 Key，不在后台列表返回 Key 明文。启用 APIKey 后，`/v1/*` 请求会按客户端 Authorization 查询 `api_keys`，校验本地记录是否存在、active/revoked/expired 状态是否有效，并用解密后的上游 Key 替换转发到中转站的 Authorization。模型权限、token 额度、速率限制和资源能力权限由中转站负责，SafetyHub 不做模型/能力 allowlist 拦截，相关字段已从当前 schema、后台表单和 API 响应中删除。若数据库中还没有任何 APIKey，`/v1/*` 会保持阶段 1-4 的过渡透传行为，便于上线迁移。
+
+当前代码尚未具备 KeyProvider 具体适配器、中转站联通创建 Key、替换后首次请求失败自动回滚、文生图图片本体异步归档、告警通知、文件安全、审批运行链路和中转站配额/速率只读观测能力。
 
 ---
 
@@ -18,157 +20,79 @@
 
 | 阶段 | 名称 | 当前状态 | 代码事实 |
 |------|------|----------|----------|
-| 阶段 1 | 透传中继 + 健康检查 | ✅ 已完成 | OpenAI-compatible `/v1/*` 通用透传、`/health/live`、`/health/ready`、Request ID、Header Policy、单上游路由已实现；Chat Completions 进入请求侧扫描、脱敏和伪装拦截，非 Chat 接口默认透明透传 |
-| 阶段 2 | 弱扫描 MVP | ✅ 已完成 | Scanner、关键词/正则、block 伪装回复、desensitize 改写转发、弱规则集收敛、定时热加载和对应测试已完成 |
-| 阶段 3 | 归档 + 审计 | 🟡 部分完成 | 已实现 `storage/archive.py`、`storage/audit.py`、Chat 非流式归档/审计写入、block/desensitize 动作归档、最近对话观测 API、SQLite 旧表缺列补齐和相关测试；流式响应完整拼接归档、文生图元数据归档、R1~R9 schema 预留仍未完成 |
-| 阶段 4 | 管理员认证 + 最小后台 | ⏳ 待开始 | 已有 `admin/router.py` 的最近观测 API 和 `admin/static/index.html`、`style.css`、`app.js` 骨架；无 `admin/schemas.py`、`middleware/auth.py`、正式认证和前端观测页面 |
-| 阶段 5 | APIKey 管理 | ⏳ 待开始 | 无 APIKey CRUD、identity 中间件、加密存储和上游 Key 替换能力 |
-| 阶段 6 | KeyProvider + 中转站联通 | ⏳ 待开始 | `governance/` 仅有包初始化文件，无 Provider 抽象和适配器 |
-| 阶段 7 | 扫描升级 | ⏳ 待开始 | 当前已有 20 条关键词 + 10 条正则配置，其中阶段 2 默认仅启用 5 条极保守关键词 block 和 2 条手机号 desensitize；扩展规则保留但默认关闭，尚未形成阶段 7 的 30+ PII、分级策略和误报回归体系 |
+| 阶段 1 | 透传中继 + 健康检查 | ✅ 已完成 | OpenAI-compatible `/v1/*` 通用透传、`/health/live`、`/health/ready`、Request ID、Header Policy、单上游路由已实现 |
+| 阶段 2 | 弱扫描 MVP | ✅ 已完成 | Scanner、关键词/正则、block 伪装回复、desensitize 改写转发、弱规则集收敛、定时热加载、管理后台规则启停和手动热加载及对应测试已完成 |
+| 阶段 3 | 归档 + 审计 | ✅ 已完成 | Chat 非流式/流式归档、block/desensitize 动作审计、文生图元数据归档、最近对话观测 API、SQLite 旧表缺列补齐、R1~R9 schema 预留和相关测试已完成 |
+| 阶段 4 | 管理员认证 + 最小后台 | ✅ 已完成 | Basic Auth + IP 白名单、表单登录、后台静态页面鉴权、归档/审计/统计 API、规则管理 API、管理员操作审计和最小静态后台已完成 |
+| 阶段 5 | APIKey 管理 | ✅ 已完成 | `middleware/identity.py`、`governance/api_keys.py`、K-Sync 创建、加密存储、APIKey 有效性校验、上游 Key 映射、后台 CRUD、单条替换和 CSV 批量替换上游 Key 已完成；模型/token/资源能力权限由中转站负责 |
+| 阶段 6 | KeyProvider + 中转站联通 | ⏳ 待开始 | 暂无 Provider 抽象和适配器，当前阶段 5 仍以手动录入已有中转站 Key 为主 |
+| 阶段 7 | 扫描升级 | ⏳ 待开始 | 当前已有 20 条关键词 + 10 条正则配置，扩展规则保留但默认关闭，尚未形成阶段 7 的完整 PII、分级策略和误报回归体系 |
 | 阶段 8 | 可观测性 + 告警 | ⏳ 待开始 | 无 Prometheus 指标、Webhook 告警、告警限流、审计导出、文生图图片本体异步归档、后台预览/下载、存储配额和保留策略 |
-| 阶段 9 | 审批 + 安全策略 + 审批链 | ⏳ 待开始 | 无审批请求、策略表、审批链表和相关治理逻辑 |
+| 阶段 9 | 审批 + 安全策略 + 审批链 | ⏳ 待开始 | 无审批运行链路、策略绑定运行逻辑和审批链路由 |
 | 阶段 10 | 远期能力 | ⏳ 待开始 | `file_security/` 仅有包初始化文件，无文件解析、NER、配额、多上游和多租户能力 |
 
 ---
 
-## 三、已实现能力明细
-
-### 3.1 阶段 1：透传中继 + 健康检查
+## 三、阶段 5 已实现能力明细
 
 | 能力 | 文件 | 当前结果 |
 |------|------|----------|
-| FastAPI 应用入口 | `main.py` | 生命周期中初始化数据库、Scanner、UpstreamRouter 和规则热加载任务，并注册 `/health`、`/v1` 路由 |
-| 配置管理 | `config.py` | 使用 `pydantic-settings` 读取 `.env`，生产环境校验 `UPSTREAM_URL` 与 `ADMIN_PASSWORD` 强度 |
-| 健康检查 | `observability/health.py` | 提供 `/health/live` 和 `/health/ready`，ready 检查数据库与规则文件 |
-| Request ID | `observability/request_id.py` | 为请求生成或透传 `X-Request-ID` |
-| Header Policy | `proxy/header_policy.py` | 剥离 Host、Hop-by-hop、Cookie、转发链路和内部 Header，保留 Authorization 等上游需要的 Header |
-| 单上游路由 | `proxy/upstream_router.py` | 支持默认上游地址拼接 `/v1/*` 请求路径，预留 model/api_key/capability 参数 |
-| 通用中继 | `proxy/relay.py` | 支持 OpenAI-compatible `/v1/*` 通用透传，保留查询参数并透传上游响应内容和状态码 |
-| 安全治理入口 | `proxy/relay.py` | Chat Completions 提取 `messages` 并进入 Scanner；block 返回伪装回复，desensitize 改写请求侧文本后转发；Embeddings、Completions、Responses、Images、未知接口默认透明透传 |
-| 流式透传工具 | `proxy/stream.py` | 支持 SSE 逐 chunk 透传和收集工具；当前 Chat stream 主链路使用逐 chunk 透传 |
-
-### 3.2 阶段 2：弱扫描 MVP
-
-| 能力 | 文件 | 当前结果 |
-|------|------|----------|
-| Scanner 数据模型 | `engine/models.py` | 定义 `ScannerResult`、`AggregatedScanResult`，支持 block/desensitize/warn/pass 判断 |
-| Scanner 抽象基类 | `engine/base.py` | 定义 `scan`、`reload`、`name` 接口 |
-| 文本归一化 | `engine/normalizer.py` | 支持 URL 解码、HTML unescape、NFKC、零宽字符移除、控制字符清理、空白压缩 |
-| 扫描调度 | `engine/scanner.py` | 支持链式调度、block 早停、desensitize/warn 汇总、异常降级放行 |
-| 关键词扫描 | `engine/rules_keyword.py` | 支持 enabled、contains/exact/prefix、大小写配置、命中片段脱敏和 reload |
-| 正则扫描 | `engine/rules_regex.py` | 支持 enabled、预编译、ignore_case、错误规则跳过、命中片段脱敏和 reload |
-| 规则配置 | `engine/rules_config.yaml` | 当前配置 20 条关键词规则、10 条正则规则；默认启用 5 条极保守关键词 block、`RG-PHONE-CN` 和 `RG-PHONE-INTL` desensitize，扩展规则默认关闭 |
-| 伪装回复 | `proxy/fake_response.py` | block 请求返回 OpenAI Chat Completions 兼容 JSON 或 SSE 伪装回复 |
-| 脱敏转发 | `proxy/relay.py` | 命中手机号 desensitize 后仅改写 Chat `messages` 文本字段，再转发上游；响应原样透传 |
-| 规则热加载 | `main.py` | 应用启动后按 `rules_reload_interval` 周期调用 `scanner.reload_all()`，关闭时取消后台任务 |
-
-### 3.3 阶段 3：归档 + 审计数据闭环第一版
-
-| 能力 | 文件 | 当前结果 |
-|------|------|----------|
-| 归档模型扩展 | `storage/models.py` | `MessageArchive` 已增加 `prompt_original`、`prompt_desensitized`、`is_desensitized`、`action_taken`、`matched_rule_ids`、`image_metadata` 等字段 |
-| SQLite 旧表兼容 | `storage/database.py` | 应用启动 `init_db()` 时对 SQLite 旧版 `message_archives` 表执行缺列补齐，避免无迁移系统时写入失败 |
-| 归档写入/读取 | `storage/archive.py` | 已实现 `ArchivePayload`、`ArchiveWriter`、`ArchiveReader.recent()`，支持原始/脱敏 prompt、响应、动作和规则 ID 归档 |
-| 审计写入 | `storage/audit.py` | 已实现 `AuditPayload`、`AuditWriter.write_scan_result()`，命中事件写入 `audit_logs`，包含规则、级别、命中片段和全文 hash |
-| Relay 集成 | `proxy/relay.py` | Chat block/desensitize/pass 路径接入归档；命中路径接入审计；归档/审计失败降级，不影响主链路 |
-| 最近观测 API | `admin/router.py`、`main.py` | 新增 `/admin/api/observations/recent`，返回最近少量 Chat 样本，包含 role、原始/脱敏 messages、响应、命中动作和规则 ID |
-| 已知边界 | `proxy/relay.py` | 流式请求当前归档 prompt、动作和 `{stream: true}` 响应占位，尚未拼接完整 SSE 响应内容 |
-
-### 3.4 测试与部署辅助
-
-| 类别 | 当前结果 |
-|------|----------|
-| 单元/集成测试 | 当前共 43 个测试，覆盖 health、keyword、regex、scanner、fake_response、relay、header_policy、upstream_router、rules_config、rules_reload、archive、audit、observations |
-| 测试结果 | `python -m pytest` 实测通过，43 passed；Python 3.13 下存在 `datetime.utcnow()` 弃用警告，后续可统一替换为 timezone-aware UTC 时间 |
-| 交付脚本 | 已存在 Windows/Linux 直接部署、Docker 部署、venv 初始化、engine/relay/venv 验证脚本 |
-| 真实上游触达 | 文档记录本地上游为 `https://yxai-api.nanfu.com`，占位令牌请求可触达上游并返回 401/403 类认证响应 |
+| APIKey 服务层 | `governance/api_keys.py` | 提供 K-Sync 创建、Key 哈希、前后缀提取、加密/解密、列表、详情、吊销、单条替换和批量替换能力 |
+| 加密存储 | `governance/api_keys.py` | 使用 `SAFETYHUB_DATA_KEY` 派生密钥生成加密信封，数据库不保存上游 Key 明文；开发环境未配置时使用本地开发派生 Key，生产环境要求配置数据密钥 |
+| Identity 中间件 | `middleware/identity.py` | 解析 `/v1/*` Authorization，匹配 `api_keys` 记录，校验 active/expired/revoked 状态，并构建 request identity |
+| 资源权限边界 | `middleware/identity.py`、`proxy/relay.py`、`storage/models.py` | SafetyHub 只校验 APIKey 本地记录有效性并替换上游 Key；模型权限、token 额度、速率限制和资源能力权限由中转站判定，相关字段已从 SafetyHub schema、后台表单和 API 响应中删除 |
+| 上游 Key 替换 | `proxy/relay.py`、`proxy/header_policy.py` | 已启用 Header Policy 的 `upstream_api_key` 分支，转发时用解密后的上游 Key 替换客户端 SafetyHub Key |
+| 归档与审计身份绑定 | `proxy/relay.py` | Chat 和文生图归档写入 `user_id`、`api_key_id`；命中审计写入 `user_id` |
+| 后台 API | `admin/router.py`、`admin/schemas.py` | `/admin/api/api-keys` 支持创建、列表、详情、吊销、单条替换和 CSV 批量替换 |
+| 后台页面 | `admin/static/api_keys.html`、`admin/static/js/app.js`、`admin/static/css/style.css` | APIKey 页面支持新建 K-Sync、列表查看、吊销、单条替换和 CSV 批量替换，列表只展示前后缀 |
+| 管理员操作审计 | `admin/router.py`、`storage/admin_ops.py` | 创建、查看详情、吊销、单条替换、批量替换均写入 `admin_operations` |
+| SQLite 兼容 | `storage/database.py` | 对 `api_keys` 旧表补齐阶段 5 字段，避免已有 SQLite 数据库缺列导致写入失败 |
+| 测试覆盖 | `tests/test_api_keys.py`、`tests/test_admin_stage4.py` | 覆盖 APIKey 服务、后台 CRUD、加密不回显、上游 Key 替换、allowlist 拒绝和阶段 4 兼容断言 |
 
 ---
 
-## 四、尚未完成与风险点
+## 四、阶段 5 边界与风险点
 
 | 优先级 | 未完成项 | 影响 |
 |--------|----------|------|
-| P0 | 流式响应完整归档未实现 | 当前流式请求只归档 prompt、动作和 `{stream: true}` 响应占位，无法在后台回放完整流式回答 |
-| P0 | 正式归档/审计查询 API 未完成 | 目前只有最近观测 API，尚无 `/admin/api/archives`、`/admin/api/audits` 的正式分页、筛选和详情接口 |
-| P0 | 管理后台认证未实现 | `/admin/api/observations/recent` 已存在但尚未接 Basic Auth + IP 白名单，包含敏感原文，生产前必须补齐 |
-| P0 | 前端观测页面未实现 | 后端已有最近观测 API，但 `observations.html` 尚未创建，管理员暂不能通过页面查看样本 |
-| P1 | 文生图元数据归档未实现 | 阶段 3 无法沉淀文生图 prompt、参数和响应引用 |
+| P1 | 替换后首次请求验证新 upstream_key，失败时回滚旧 Key | 当前单条/批量替换会立即生效，但不自动触达上游验证新 Key 有效性；如新 Key 错误，需要管理员再次替换 |
+| P1 | 标准加密库迁移 | 当前未新增第三方依赖，使用标准库加密信封满足不明文存储和完整性校验；后续如允许新增依赖，建议迁移到 Fernet 或 AES-GCM |
+| P1 | KeyProvider 未实现 | 阶段 5 仅支持手动录入已有中转站 Key，自动创建/续约/迁移放入阶段 6 |
 | P1 | 文生图图片本体异步归档未实现 | 阶段 8 无法提供图片资产预览/下载、存储配额和保留策略 |
-| P0 | R1~R9 schema 预留未完成 | 阶段 5/6/9 后续启用 APIKey、策略、审批、配额时仍需改 schema |
 | P1 | 告警通知未实现 | 高风险拦截不会推送企微/飞书 |
-| P1 | 生产日志和告警脱敏链路未形成闭环 | 当前规则命中片段、请求侧手机号和审计 matched_snippet 已做脱敏，后续告警和管理员操作日志仍需统一策略 |
 
 ---
 
 ## 五、统一阶段口径
 
-### 5.1 阶段口径
-
-- 当前阶段统一为：**阶段 3 — 归档 + 审计数据闭环第一版**。
-- 阶段 1 统一判定为：**已完成**。
-- 阶段 2 统一判定为：**已完成**。
-- 阶段 3 统一判定为：**部分完成**，Chat 非流式归档/审计和最近观测 API 已落地；流式完整响应归档、正式查询 API、管理认证、前端观测页面、文生图元数据和 R1~R9 仍待完成。
+- 当前阶段统一为：**阶段 6 — KeyProvider + 中转站联通准备启动**。
+- 阶段 1 至阶段 5 统一判定为：**已完成**。
+- 阶段 5 默认模式为 **K-Sync**：管理员录入的中转站 Key 同时作为客户端 SafetyHub Key 和上游 Key。
+- 当管理员替换上游 Key 后，该记录自动进入 **K-Decoupled**：客户端 SafetyHub Key 不变，上游 Key 改为新中转站 Key。
+- 阶段 5 的 APIKey 治理采用渐进启用策略：`api_keys` 表为空时保持历史透传；创建第一条 APIKey 后 `/v1/*` 开始执行 APIKey 有效性校验和上游 Key 映射，不接管中转站的模型/token/资源权限判断。
 - 后续文档不再使用“旧阶段 0 / 旧阶段 1 第一批 / 第二批 / 第三批”表达，全部按新版 10 阶段路线图描述。
-
-### 5.2 认证方案
-
-- 阶段 4 管理后台认证统一采用 **Basic Auth + IP 白名单**。
-- 当前 `config.py` 已有 `admin_username`、`admin_password`、`admin_ip_whitelist`，与 Basic Auth 方案兼容。
-- 不采用 Bearer Token 登录态作为阶段 4 默认方案；如后续需要登录态或 SSO，放入阶段 10 或后续增强。
-
-### 5.3 健康检查路径
-
-- 健康检查统一为 `/health/live` 和 `/health/ready`。
-- 不再使用 `/healthz`、`/readyz` 作为阶段 1 交付口径，除非代码后续显式增加兼容别名。
-
-### 5.4 规则与脱敏策略
-
-- 阶段 2 默认规则已收敛为弱扫描 MVP：手机号 desensitize + 5 条极保守关键词 block。
-- 当前 `engine/rules_config.yaml` 中保留 20 条关键词 + 10 条正则作为阶段 7 扩展规则基础，但除阶段 2 默认规则外均默认关闭。
-- 阶段 2 已补齐 desensitize 动作：Chat 中 `user`、`tool`、`function` messages 的文本字段会在转发前执行手机号脱敏，`assistant`、`system`、`developer` 不脱敏，响应原样透传。
-- 阶段 2 的 Chat block 判定默认只扫描最新一条允许扫描 role 的有文本 message；允许 role 为 `user`、`tool`、`function`，`assistant`、`system`、`developer` 不参与 block 判定，用于覆盖普通用户输入和 Agent tool/function/file content 等尾部新增内容，并避免历史敏感词导致粘滞拦截。
-- 该 role 策略参考了主流 Agent 协议形态：OpenAI-compatible Chat Completions 工具结果回传为 `tool`，Claude Messages 工具结果回传在 `user` 的 `tool_result` content block 中，编码 Agent 通常把文件读取/命令输出追加到下一次模型请求。
-- 当前脱敏改写采用同一组手机号正则在 Chat 文本字段中递归替换，不直接使用合并扫描文本的 position 回写 JSON，避免多 message/content parts 偏移映射错误。
-
-### 5.5 阶段 3 前置边界
-
-阶段 3 可以启动。阶段 2 已满足阶段 3 最小进入条件：
-
-- block 请求不发往上游并返回伪装回复。
-- desensitize 请求改写 prompt 后发往上游。
-- warn 请求放行；后续阶段 3 接入审计记录。
-- pass 请求原样透传。
-- 阶段 2 弱规则集默认启用，完整规则集保留但默认不扩大误报面。
 
 ---
 
 ## 六、下一步开发计划
 
-### 6.1 当前批次：阶段 3 归档 + 审计
+### 6.1 下一批次：阶段 6 KeyProvider + 中转站联通
 
 | 优先级 | 任务 | 目标产出 |
 |--------|------|----------|
-| P0 | ✅ 改造 `storage/models.py` | `MessageArchive` 已增加 `prompt_original`、`prompt_desensitized`、`is_desensitized`、`action_taken`、`matched_rule_ids`、`image_metadata`；APIKey/策略/审批/配额预留仍待做 |
-| P0 | ✅ 实现 `storage/archive.py` | ArchiveWriter + ArchiveReader 已完成；支持正常、拦截、脱敏请求的归档，流式响应内容暂以 `{stream: true}` 占位 |
-| P0 | ✅ 实现 `storage/audit.py` | AuditWriter 已完成；记录 block/desensitize 等命中事件，pass 无命中时不写审计 |
-| P0 | ✅ 集成 relay 归档 | Chat 非流式路径已写入归档，失败不影响主链路；流式完整响应拼接仍待做 |
-| P0 | ✅ 增加上线临时观测 API | `/admin/api/observations/recent` 已完成，返回最近少量完整 Chat 样本；前端页面和管理认证仍待做 |
-| P0 | ⏳ 补齐管理认证 | 为 `/admin/api/*` 接入 Basic Auth + IP 白名单，尤其保护临时观测窗口中的敏感原文 |
-| P0 | ⏳ 增加临时观测前端页面 | 创建 `observations.html`，展示 role、原始/脱敏 messages、响应和命中动作 |
-| P0 | ⏳ 完成流式响应完整归档 | 改造 SSE 透传链路，收集完整响应后写入归档 |
-| P1 | ⏳ 增加文生图元数据归档 | 记录 prompt、model、size、style、n、响应 URL 或 b64 存在状态、request_id、用户、时间；阶段 3 不保存图片本体 |
-| P0 | ⏳ 完成 R1~R9 预留 | Header 上游 Key 参数、ApiKeyRecord、SecurityPolicy、ApprovalChain、配额字段及相关测试 |
-| P0 | 🟡 增加阶段 3 测试 | 已新增 `tests/test_archive.py`、`tests/test_audit.py`、`tests/test_observations.py` 和 relay 归档/审计测试；`tests/test_models.py`、Header 可选 upstream key 分支仍待补 |
+| P0 | ⏳ 设计 `KeyProvider` 抽象 | 统一 create/revoke/rotate/validate/list 接口，relay 不感知具体中转站 |
+| P0 | ⏳ 实现 passthrough/static Provider | 保持阶段 5 手动录入能力，并为 Provider 切换提供默认实现 |
+| P0 | ⏳ 实现 openai-compatible/oneapi Provider 适配边界 | 支持按配置调用中转站创建 Key 或验证 Key |
+| P0 | ⏳ 后台创建表单接入 Provider 创建 | 管理员可选择手动录入或由中转站 Provider 创建 |
+| P1 | ⏳ 替换后首次请求验证与失败回滚 | 降低管理员录入错误上游 Key 造成的业务中断风险 |
+| P1 | ⏳ Provider 操作审计与迁移结果页 | 创建、吊销、迁移、失败重试均可追溯 |
 
 ### 6.2 后续批次概览
 
 | 阶段 | 目标 |
 |------|------|
-| 阶段 4 | Basic Auth + IP 白名单、`admin/router.py`、`admin/schemas.py`、归档/审计/统计查询、最小静态后台 |
-| 阶段 5 | APIKey 管理、K-Sync 默认、加密存储、单条/批量替换上游 Key、identity 中间件 |
 | 阶段 6 | KeyProvider 抽象、passthrough/static/oneapi/openai_compat Provider、中转站联通创建和迁移 |
-| 阶段 7 | 完整 PII 规则、20+ 关键词规则正式启用、分级策略、绕过防护、误报回归 |
+| 阶段 7 | 完整 PII 规则、20+ 关键词规则正式启用、分级策略、绕过防护、误报回归，沿用阶段 2 已完成的启停和热加载机制 |
 | 阶段 8 | Prometheus 指标、Webhook 告警、告警限流、仪表盘增强、审计 CSV 导出、文生图图片本体异步归档、后台预览/下载、存储配额和保留策略 |
 | 阶段 9 | 临时审批、安全策略、审批链路由、多级审批和超时升级 |
 | 阶段 10 | 文件安全、NER、全文搜索、配额、多上游、多租户、SSO/角色权限 |
@@ -183,52 +107,28 @@ NF-SafetyHub/
 ├── config.py
 ├── dependencies.py
 ├── engine/
-│   ├── base.py
-│   ├── models.py
-│   ├── normalizer.py
-│   ├── rules_config.yaml
-│   ├── rules_keyword.py
-│   ├── rules_regex.py
-│   └── scanner.py
 ├── proxy/
-│   ├── fake_response.py
-│   ├── header_policy.py
-│   ├── relay.py
-│   ├── stream.py
-│   └── upstream_router.py
 ├── observability/
-│   ├── health.py
-│   └── request_id.py
 ├── storage/
-│   ├── database.py
-│   ├── models.py
-│   └── migrations/
 ├── admin/
+│   ├── router.py
+│   ├── schemas.py
 │   └── static/
-│       ├── index.html
+│       ├── api_keys.html
 │       ├── css/style.css
 │       └── js/app.js
 ├── governance/
-├── file_security/
-├── notify/
+│   ├── __init__.py
+│   └── api_keys.py
 ├── middleware/
-├── scripts/
-│   └── init_db.py
+│   ├── auth.py
+│   └── identity.py
 ├── tests/
-│   ├── test_fake_response.py
-│   ├── test_header_policy.py
-│   ├── test_health.py
-│   ├── test_keyword.py
-│   ├── test_regex.py
+│   ├── test_admin_auth.py
+│   ├── test_admin_stage4.py
+│   ├── test_api_keys.py
 │   ├── test_relay.py
-│   ├── test_rules_config.py
-│   ├── test_rules_reload.py
-│   ├── test_scanner.py
-│   └── test_upstream_router.py
-├── verify/
-│   ├── verify_chat_non_stream.py
-│   └── verify_chat_stream.py
-├── 交付运行手册/
+│   └── ...
 └── 产品研发控制/
 ```
 
@@ -238,19 +138,22 @@ NF-SafetyHub/
 
 | 验证项 | 命令 | 当前结果 |
 |--------|------|----------|
-| 全量单元测试 | `python -m pytest` | 通过，43 passed |
-| 测试覆盖范围 | `tests/` | health、keyword、regex、scanner、fake_response、relay、header_policy、upstream_router、rules_config、rules_reload、archive、audit、observations |
-| 代码结构检查 | 文件系统检查 | 阶段 3 已新增 archive/audit/observations 关键实现；阶段 4 正式认证和前端页面、阶段 5/6/8/9/10 关键实现仍待补齐 |
-| IDE 诊断 | Trae/VS Code diagnostics | 无错误 |
+| 阶段 5 专项测试 | `conda run -n safetyhub python -m pytest tests/test_api_keys.py -vv -s` | 通过，4 passed |
+| 全量单元测试 | `C:\Users\Zhihua Song\.conda\envs\safetyhub\python.exe -m pytest` | 通过，66 passed |
+| 测试覆盖范围 | `tests/` | admin_auth、admin_stage4、api_keys、health、keyword、regex、scanner、fake_response、relay、header_policy、upstream_router、rules_config、rules_reload、archive、audit、models、observations |
+| 代码结构检查 | 文件系统检查 | 阶段 5 APIKey 服务层、identity 中间件、后台接口、前端页面、SQLite 兼容和测试均已补齐 |
+
+备注：本次全量测试先尝试 `conda run -n safetyhub python -m pytest` 时遇到 Conda 自身异常退出，随后使用该环境 Python 绝对路径绕过 Conda 插件异常完成验证，业务测试结果为 66 passed。
 
 ---
 
 ## 九、当前注意事项
 
 - 当前 `.env` 可配置真实 `UPSTREAM_URL`，但真实上游令牌不得写入文档、测试代码、命令日志或 `.env.example`。
+- 生产环境启用阶段 5 前应设置 `SAFETYHUB_DATA_KEY`，用于加密 `upstream_key_encrypted`。
+- 阶段 5 过渡策略为 `api_keys` 表为空时继续透传；创建第一条 APIKey 后 `/v1/*` 开始要求客户端 Bearer Key 匹配有效记录。
+- 后台列表和 API 响应只展示 Key 前后缀，不返回 APIKey 明文；管理员替换上游 Key 时需要二次确认操作流程。
 - Windows PowerShell 直接传中文 JSON 可能出现编码损坏，中文规则测试建议使用 UTF-8 请求体文件或 JSON Unicode 转义。
-- 当前 block 拦截不会请求上游，但也不会写入归档、审计或告警。
+- 当前 block 拦截不会请求上游，但会写入归档和审计；告警仍待阶段 8 实现。
 - 当前 desensitize 只作用于 Chat Completions 请求侧 `messages` 文本字段；非 Chat 接口默认透明透传，响应内容原样透传。
-- 当前规则命中片段已做脱敏，后续归档、审计、告警和后台展示仍必须避免泄露 prompt 原文和 APIKey 明文。
-- 当前数据库表通过 `create_all` 创建，阶段 3 schema 稳定后应评估引入 Alembic 或等效迁移机制。
-- 当前 `admin/static/index.html` 只能视为前端骨架，不能代表阶段 4 管理后台完成。
+- 当前数据库表通过 `create_all` 和 SQLite 缺列补齐维持兼容，后续 schema 稳定后应评估引入 Alembic 或等效迁移机制。

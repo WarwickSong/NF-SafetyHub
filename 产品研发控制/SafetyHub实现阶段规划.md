@@ -8,7 +8,7 @@
 
 ```
 阶段 1   透传中继 + 健康检查
-阶段 2   弱扫描 MVP（请求侧手机号脱敏 + 极保守关键词伪装回复）
+阶段 2   弱扫描 MVP（请求侧手机号脱敏 + 极保守关键词伪装回复 + 规则启停与热加载）
 阶段 3   归档 + 审计
 阶段 4   管理员认证 + 最小后台框架
 阶段 5   APIKey 管理（K-Sync 默认 + 加密 + 上游 Key 替换）
@@ -22,12 +22,12 @@
 | 阶段 | 名称 | 对应版本 | 阶段目标 |
 |------|------|---------|---------|
 | 阶段 1 | 透传中继 + 健康检查 | v1.0 | 让客户端通过 SafetyHub 无感访问中转站，行为等价直连 |
-| 阶段 2 | 弱扫描 MVP | v1.0 | 跑通 scanner + 脱敏 + 伪装回复链路，但只启用低误报规则 |
+| 阶段 2 | 弱扫描 MVP | v1.0 | 跑通 scanner + 脱敏 + 伪装回复链路，只启用低误报规则，并支持规则启停与热加载 |
 | 阶段 3 | 归档 + 审计 | v1.0 | 保存原始 + 脱敏两份 prompt，记录所有命中事件，并完成 R1~R9 schema 预留 |
 | 阶段 4 | 管理员认证 + 最小后台 | v1.0 | 管理后台可登录，可查询归档、审计、基础统计 |
 | 阶段 5 | APIKey 管理 | v1.0 | 默认 K-Sync，支持加密存储、手动录入历史 Key、单条/批量替换上游 Key |
 | 阶段 6 | KeyProvider + 中转站联通 | v1.1 | 可视化调用中转站创建 Key，支持 Provider 切换和自动续约迁移 |
-| 阶段 7 | 扫描升级 | v1.1 | 完整 PII 检测、关键词扩充、分级决策、规则热加载 |
+| 阶段 7 | 扫描升级 | v1.1 | 完整 PII 检测、关键词扩充、分级决策和误报回归 |
 | 阶段 8 | 可观测性 + 告警 | v1.1 | 指标、仪表盘、Webhook 告警、审计导出全部就绪 |
 | 阶段 9 | 审批 + 策略 + 审批链 | v1.2 | 启用临时审批、Key 级安全策略、多级审批链 |
 | 阶段 10 | 远期能力 | v2.0+ | 文件安全、NER、配额、多上游、多租户等增强能力 |
@@ -133,7 +133,9 @@
 | S2-09 | 在 `proxy/relay.py` 集成 scanner、脱敏、block 拦截与伪装回复 | F1/F2/F6 | P0 |
 | S2-10 | 编写 `tests/test_keyword.py`、`tests/test_regex.py`、`tests/test_scanner.py` | 测试 | P0 |
 | S2-11 | 编写 `tests/test_fake_response.py`、`tests/test_relay.py` | 测试 | P0 |
-| S2-12 | 接入规则定时热加载，按 `rules_reload_interval` 周期调用 `reload_all()` | F4/F5 | P1 |
+| S2-12 | ✅ 接入规则定时热加载，按 `rules_reload_interval` 周期调用 `reload_all()` | F4/F5 | P1 |
+| S2-13 | ✅ 在管理后台提供规则启停 API 与页面操作，修改 `enabled` 后立即触发 `reload_all()` | F4/F5/F8 | P1 |
+| S2-14 | ✅ 在管理后台提供手动规则热加载 API 与页面按钮，不修改配置，仅立即重载当前规则文件 | F4/F5/F8 | P1 |
 
 ### 3.3 阶段 2 默认规则集
 
@@ -176,37 +178,37 @@
 
 | 任务 ID | 任务 | 所属功能 | 优先级 |
 |---------|------|----------|--------|
-| S3-01 | 编写 `storage/models.py`，创建 MessageArchive、AuditLog、ApiKeyRecord、ApprovalRequest、SecurityPolicy、ApprovalChain | 存储 | P0 |
+| S3-01 | ✅ 编写 `storage/models.py`，创建 MessageArchive、AuditLog、ApiKeyRecord、ApprovalRequest、SecurityPolicy、ApprovalChain，并统一 timezone-aware UTC 时间字段 | 存储 | P0 |
 | S3-02 | ✅ MessageArchive 存储 `prompt_original`、`prompt_desensitized`、`is_desensitized`，并补充 `action_taken`、`matched_rule_ids` | F3/F6.1 | P0 |
 | S3-03 | ✅ 编写 `storage/archive.py`（ArchiveWriter + ArchiveReader） | F3 | P0 |
 | S3-04 | ✅ 非流式路径集成归档 | F3 | P0 |
-| S3-05 | ⏳ 流式路径通过 `collect_stream` 收集完整响应后归档；当前仅归档 `{stream: true}` 占位 | F3 | P0 |
-| S3-06 | 增加文生图元数据归档：prompt、model、size、style、n、response URL 或 b64 存在状态、request_id、用户、时间；阶段 3 不保存图片本体 | F3 | P1 |
+| S3-05 | ✅ 流式路径收集完整 SSE 响应后归档，包含原始 SSE 内容和提取后的 `message_content` | F3 | P0 |
+| S3-06 | ✅ 增加文生图元数据归档：prompt、model、size、style、n、response URL 或 b64 存在状态、request_id、时间；阶段 3 不保存图片本体 | F3 | P1 |
 | S3-07 | ✅ 编写 `storage/audit.py`（AuditWriter） | F7 | P0 |
 | S3-08 | 🟡 在 scanner/relay 中写入 desensitize/block 命中审计；warn 规则当前默认未启用，pass 无命中不写审计 | F7 | P0 |
 | S3-09 | ✅ 写入失败降级，归档或审计失败不得影响主链路 | F3/F7 | P0 |
-| S3-10 | 🟡 编写 `tests/test_archive.py`、`tests/test_audit.py`、`tests/test_observations.py` 和 relay 归档/审计测试；`tests/test_models.py`、文生图元数据归档测试仍待补 | 测试 | P0 |
+| S3-10 | ✅ 编写 `tests/test_archive.py`、`tests/test_audit.py`、`tests/test_observations.py`、`tests/test_models.py`、Header 可选 upstream key 分支和 relay 流式/文生图归档测试 | 测试 | P0 |
 | S3-11 | ✅ 增加 `/admin/api/observations/recent` 最近对话观测 API，用于上线初期查看真实 role/messages 样本 | F3/F8 | P0 |
 
 ### 4.2 R1~R9 预留任务
 
 | 任务 ID | 改动 | 文件 | 兼容性保证 |
 |---------|------|------|-----------|
-| S3-R1 | `build_upstream_headers` 增加 `upstream_api_key=None` 可选参数 | `proxy/header_policy.py` + `proxy/relay.py` | 当前传 `None`，透传行为不变 |
-| S3-R2 | 新增 `ApiKeyRecord`，含 `provider_name`、`upstream_key_id`、`upstream_key_encrypted`、`is_decoupled` 等字段 | `storage/models.py` | 表存在但无人写入 |
-| S3-R3 | 新增 `key_provider_type="passthrough"` 与 `key_provider_admin_token=""` | `config.py` | 默认不启用 Provider |
-| S3-R4 | 测试 `upstream_api_key=None` / `="sk-real"` 两条 Header 分支 | `tests/test_header_policy.py` | 防止透传退化 |
-| S3-R5 | 测试 `api_keys` 表创建与字段齐全 | `tests/test_models.py` | schema 预留可验证 |
-| S3-R6 | `ApiKeyRecord` 新增 `model_quotas`、`capability_quotas`、`rate_limits`、`usage_snapshot` | `storage/models.py` | 全部 NULL 默认 |
-| S3-R7 | 补齐 `security_policy_id`、`approval_chain_id`、`cost_center`、`chain_id`、`current_level`、`escalated_at` 等关联字段 | `storage/models.py` | 全部 NULL 默认 |
-| S3-R8 | 新增 `SecurityPolicy` 与 `ApprovalChain` 两张表 | `storage/models.py` | 表存在但无人写入 |
-| S3-R9 | 测试 6 张表 `create_all` 能成功，预留字段默认值正确 | `tests/test_models.py` | 防止后续迁移遗漏 |
+| S3-R1 | ✅ `build_upstream_headers` 增加 `upstream_api_key=None` 可选参数 | `proxy/header_policy.py` + `proxy/relay.py` | 当前传 `None`，透传行为不变 |
+| S3-R2 | ✅ 新增 `ApiKeyRecord`，含 `provider_name`、`upstream_key_id`、`upstream_key_encrypted`、`is_decoupled` 等字段 | `storage/models.py` | 表存在但无人写入 |
+| S3-R3 | ✅ 新增 `key_provider_type="passthrough"` 与 `key_provider_admin_token=""` | `config.py` | 默认不启用 Provider |
+| S3-R4 | ✅ 测试 `upstream_api_key=None` / `="sk-real"` 两条 Header 分支 | `tests/test_header_policy.py` | 防止透传退化 |
+| S3-R5 | ✅ 测试 `api_keys` 表创建与字段齐全 | `tests/test_models.py` | schema 预留可验证 |
+| S3-R6 | ✅ 明确不在 `ApiKeyRecord` 预留模型配额、能力配额、速率限制和用量快照字段 | `storage/models.py` | 资源权限与配额由中转站管理，SafetyHub schema 保持干净 |
+| S3-R7 | ✅ 补齐 `security_policy_id`、`approval_chain_id`、`cost_center`、`chain_id`、`current_level`、`escalated_at` 等关联字段 | `storage/models.py` | 全部 NULL 默认 |
+| S3-R8 | ✅ 新增 `SecurityPolicy` 与 `ApprovalChain` 两张表 | `storage/models.py` | 表存在但无人写入 |
+| S3-R9 | ✅ 测试 6 张表 `create_all` 能成功，预留字段默认值正确 | `tests/test_models.py` | 防止后续迁移遗漏 |
 
 ### 4.3 产出物
 
 | 产出物 | 验收标准 |
 |--------|---------|
-| 消息归档 | Chat 非流式请求已有 request_id、model、capability、原始 prompt、脱敏 prompt、response、action_taken、matched_rule_ids；user_id/api_key_id 后续随身份治理补齐 |
+| 消息归档 | Chat 非流式和流式请求已有 request_id、model、capability、原始 prompt、脱敏 prompt、response、action_taken、matched_rule_ids；流式响应归档原始 SSE 内容并提取 `message_content`；user_id/api_key_id 后续随身份治理补齐 |
 | 最近观测 API | 已提供 `/admin/api/observations/recent`，用于上线初期查看最近少量完整 Chat 样本 |
 | 文生图元数据归档 | 文生图请求记录 request_id、user_id、model、prompt、size、style、n、响应引用类型、响应 URL 或 b64 存在状态；阶段 3 不保存图片本体 |
 | 审计日志 | 已对命中事件独立记录规则 ID、级别、命中片段、全文 hash、时间；pass 无命中暂不写入审计 |
@@ -218,12 +220,12 @@
 - [x] Chat 非流式正常请求、脱敏请求、拦截请求均能写入归档
 - [x] 归档/审计失败不影响主链路
 - [x] 最近对话观测 API 能返回 role、原始/脱敏 messages、响应和命中动作
-- [ ] Chat 流式请求能归档完整响应
-- [ ] 文生图请求能写入元数据归档，且不下载、不解码、不保存图片本体
-- [ ] 命中事件全部写入 audit_logs，包含 warn 规则启用后的审计覆盖
-- [ ] 原始 prompt 与脱敏后 prompt 两份可区分查询
-- [ ] APIKey 管理预留完成，当前透传行为零变化
-- [ ] 6 张表创建成功，所有预留字段齐全
+- [x] Chat 流式请求能归档完整响应
+- [x] 文生图请求能写入元数据归档，且不下载、不解码、不保存图片本体
+- [x] 命中事件全部写入 audit_logs，包含 block/desensitize；warn 规则启用后沿用同一审计写入链路
+- [x] 原始 prompt 与脱敏后 prompt 两份可区分查询
+- [x] APIKey 管理预留完成，当前透传行为零变化
+- [x] 6 张表创建成功，所有预留字段齐全
 
 ---
 
@@ -235,18 +237,18 @@
 
 | 任务 ID | 任务 | 所属功能 | 优先级 |
 |---------|------|----------|--------|
-| S4-01 | 编写 `middleware/auth.py`，保护 `/admin/*` | F8 | P0 |
-| S4-02 | 编写 `admin/schemas.py` | F8 | P0 |
-| S4-03 | 编写 `admin/router.py`，提供归档、审计、统计 API | F8 | P0 |
-| S4-04 | 编写 `storage/admin_ops.py`，记录管理员操作审计 | F14 | P0 |
-| S4-05 | 编写 `admin/static/index.html` 仪表盘 | F8 | P0 |
-| S4-06 | 编写 `admin/static/archives.html` 消息归档页 | F8 | P0 |
-| S4-07 | 编写 `admin/static/blocks.html` 拦截/审计页 | F8 | P0 |
-| S4-08 | 编写 `admin/static/rules.html` 规则查看/启停预留页 | F8 | P1 |
-| S4-09 | 编写 `admin/static/api_keys.html` APIKey 只读占位页 | F15 | P1 |
-| S4-10 | 编写 `admin/static/approvals.html` 审批只读占位页 | F16 | P1 |
-| S4-11 | 编写 `admin/static/settings.html` 系统设置页 | F8/F14 | P1 |
-| S4-12 | 编写 `admin/static/css/style.css` 与 `admin/static/js/app.js` | F8 | P1 |
+| S4-01 | ✅ 编写 `middleware/auth.py`，保护 `/admin/*` | F8 | P0 |
+| S4-02 | ✅ 编写 `admin/schemas.py` | F8 | P0 |
+| S4-03 | ✅ 编写 `admin/router.py`，提供归档、审计、统计 API | F8 | P0 |
+| S4-04 | ✅ 编写 `storage/admin_ops.py`，记录管理员操作审计 | F14 | P0 |
+| S4-05 | ✅ 编写 `admin/static/index.html` 仪表盘 | F8 | P0 |
+| S4-06 | ✅ 编写 `admin/static/archives.html` 消息归档页 | F8 | P0 |
+| S4-07 | ✅ 编写 `admin/static/blocks.html` 拦截/审计页 | F8 | P0 |
+| S4-08 | ✅ 编写 `admin/static/rules.html` 规则管理页，承载阶段 2 已完成的启停和热加载操作 | F8/F4/F5 | P1 |
+| S4-09 | ✅ 编写 `admin/static/api_keys.html` APIKey 页面；阶段 5 已升级为可操作页面 | F15 | P1 |
+| S4-10 | ✅ 编写 `admin/static/approvals.html` 审批只读占位页 | F16 | P1 |
+| S4-11 | ✅ 编写 `admin/static/settings.html` 系统设置页 | F8/F14 | P1 |
+| S4-12 | ✅ 编写 `admin/static/css/style.css` 与 `admin/static/js/app.js` | F8 | P1 |
 
 ### 5.2 产出物
 
@@ -260,11 +262,11 @@
 
 ### 5.3 验收标准
 
-- [ ] 管理员可以登录后台
-- [ ] 未登录无法访问后台 API 和页面
-- [ ] 后台可按时段、用户、规则筛选归档和审计
-- [ ] 统计面板展示今日请求数、命中数、拦截数、趋势
-- [ ] 管理员操作写入 admin_operation_logs
+- [x] 管理员可以登录后台
+- [x] 未登录无法访问后台 API 和页面
+- [x] 后台可按时段、用户、规则筛选归档和审计
+- [x] 统计面板展示今日请求数、命中数、拦截数、趋势
+- [x] 管理员操作写入 admin_operation_logs
 
 ---
 
@@ -283,18 +285,18 @@
 
 | 任务 ID | 任务 | 所属功能 | 优先级 |
 |---------|------|----------|--------|
-| S5-01 | 编写 `middleware/identity.py`，解析 Authorization 并查询 `api_keys` | F15 | P0 |
-| S5-02 | 实现 `governance/api_keys.py`，提供 CRUD、哈希、加密存储 | F15 | P0 |
-| S5-03 | K-Sync 新建逻辑：`safetyhub_key == upstream_key`，`is_decoupled=False` | F15.1.5 | P0 |
-| S5-04 | 使用 `SAFETYHUB_DATA_KEY` 加密 `upstream_key_encrypted` | F15 | P0 |
-| S5-05 | APIKey 模型 allowlist 与 capability allowlist 校验 | F15 | P0 |
-| S5-06 | 后台 `/admin/api/api-keys` CRUD 接口 | F15 | P0 |
-| S5-07 | `admin/static/api_keys.html` 编辑能力：创建、列表、吊销、绑定中转站 Key | F15 | P0 |
-| S5-08 | 路径 A：单条替换上游 Key | F15.1.6 | P0 |
-| S5-09 | 路径 B：CSV 批量替换上游 Key | F15.1.6 | P0 |
-| S5-10 | 替换后自动标记 `is_decoupled=True`，客户端 Key 不变 | F15.1.5 | P0 |
-| S5-11 | 替换操作写入 admin_operation_logs | F14/F15 | P0 |
-| S5-12 | 替换后首次请求验证新 upstream_key，失败时回滚旧 Key | F15 | P1 |
+| S5-01 | ✅ 编写 `middleware/identity.py`，解析 Authorization 并查询 `api_keys` | F15 | P0 |
+| S5-02 | ✅ 实现 `governance/api_keys.py`，提供 CRUD、哈希、加密存储 | F15 | P0 |
+| S5-03 | ✅ K-Sync 新建逻辑：`safetyhub_key == upstream_key`，`is_decoupled=False` | F15.1.5 | P0 |
+| S5-04 | ✅ 使用 `SAFETYHUB_DATA_KEY` 加密 `upstream_key_encrypted`；当前未新增第三方依赖，使用标准库加密信封并保留后续迁移 Fernet/AES-GCM 空间 | F15 | P0 |
+| S5-05 | ✅ 明确资源权限边界并删除超边界字段：SafetyHub 不执行模型 allowlist、token 额度或 capability allowlist，模型/token/资源能力权限由中转站作为权威系统管理；`model_allowlist`、`capability_allowlist`、配额和速率限制字段不进入 SafetyHub 当前 schema | F15 | P0 |
+| S5-06 | ✅ 后台 `/admin/api/api-keys` CRUD 接口 | F15 | P0 |
+| S5-07 | ✅ `admin/static/api_keys.html` 编辑能力：创建、列表、吊销、绑定中转站 Key | F15 | P0 |
+| S5-08 | ✅ 路径 A：单条替换上游 Key | F15.1.6 | P0 |
+| S5-09 | ✅ 路径 B：CSV 批量替换上游 Key | F15.1.6 | P0 |
+| S5-10 | ✅ 替换后自动标记 `is_decoupled=True`，客户端 Key 不变 | F15.1.5 | P0 |
+| S5-11 | ✅ 替换操作写入 admin_operation_logs | F14/F15 | P0 |
+| S5-12 | ⏳ 替换后首次请求验证新 upstream_key，失败时回滚旧 Key | F15 | P1 |
 
 ### 6.3 产出物
 
@@ -305,15 +307,16 @@
 | 加密存储 | 数据库不存明文 Key，列表只展示前后缀 |
 | 单条替换 | 单个 Key 可替换上游 Key，客户端无感 |
 | 批量替换 | CSV 可批量导入新中转站 Key 顶替旧中转站 Key |
-| 权限校验 | 模型和能力超出授权范围时被拒绝 |
+| 资源权限边界 | SafetyHub 不判定模型、token 额度和资源能力权限，这些权限由中转站判定；SafetyHub 仅保存上游 Key 映射并执行安全治理，超边界字段不进入当前 schema |
 
 ### 6.4 验收标准
 
-- [ ] 历史中转站 Key 可手动录入 SafetyHub 并立即使用
-- [ ] 新建 Key 默认 K-Sync，丢失时可从中转站找回并重录
-- [ ] 单条替换上游 Key 后客户端 Authorization 不变
-- [ ] CSV 批量替换支持成功/失败结果汇总
-- [ ] Key 明文不进入日志、告警、数据库明文字段或后台列表
+- [x] 历史中转站 Key 可手动录入 SafetyHub 并立即使用
+- [x] 新建 Key 默认 K-Sync，丢失时可从中转站找回并重录
+- [x] 单条替换上游 Key 后客户端 Authorization 不变
+- [x] CSV 批量替换支持成功/失败结果汇总
+- [x] Key 明文不进入日志、告警、数据库明文字段或后台列表
+- [x] 模型权限、token 额度、速率限制和资源能力权限不由 SafetyHub 默认接管，统一交由中转站作为权威系统判定
 
 ---
 
@@ -331,7 +334,7 @@
 | S6-04 | 实现 `governance/providers/oneapi.py` | F15.2 | P0 |
 | S6-05 | 实现 `governance/providers/openai_compat.py` | F15.2 | P0 |
 | S6-06 | 在 `main.py` lifespan 中根据 `key_provider_type` 实例化 Provider | F15.2 | P0 |
-| S6-07 | 后台一键调用中转站创建 Key，支持模型、能力、过期时间 | F15.2 | P0 |
+| S6-07 | 后台一键调用中转站创建同名/同 owner Key，并获取中转站返回的 upstream_key；模型、token、能力权限在中转站侧配置和生效 | F15.2 | P0 |
 | S6-08 | Provider 切换演练（oneapi ↔ static），验证核心链路零改动 | F15.2 | P0 |
 | S6-09 | 路径 C：通过新 Provider 自动续约迁移所有 Key | F15.1.6 | P0 |
 | S6-10 | 批量导入支持 CSV、表单粘贴、脚本导入 | F15 | P1 |
@@ -347,7 +350,7 @@
 
 ### 7.3 验收标准
 
-- [ ] 后台可视化创建不同模型权限的 Key
+- [ ] 后台可视化调用中转站创建同名/同 owner Key，并保存中转站返回的 upstream_key
 - [ ] Provider 创建失败时 SafetyHub 记录回滚
 - [ ] Provider 查询失败不阻塞主链路
 - [ ] 自动续约迁移支持中断恢复和失败重试
@@ -367,7 +370,7 @@
 | S7-03 | 关键词规则扩展到 20+ 条 | F4 | P0 |
 | S7-04 | 分级决策策略配置：pass / desensitize / warn / block | F6 | P0 |
 | S7-05 | 白名单规则配置 | F4/F5 | P0 |
-| S7-06 | 规则热加载增强与回归验证，确保完整规则集修改 YAML 后 5 秒内生效 | F4/F5 | P0 |
+| S7-06 | 完整规则集启用后的误报回归与启停回归验证，沿用阶段 2 已完成的热加载机制 | F4/F5 | P0 |
 | S7-07 | 绕过路径安全测试：URL 编码、分段发送、Unicode 混淆 | F14 | P0 |
 | S7-08 | DLP 规则回归测试：正常文本 100 条 → 0 误报 | 测试 | P0 |
 | S7-09 | ReDoS 防护：匹配超时与降级策略 | F5 | P0 |
@@ -380,7 +383,7 @@
 | 完整正则规则库 | 30+ 条规则，覆盖主要 PII 类型 |
 | 完整关键词规则库 | 20+ 条规则，覆盖商业机密、技术机密、人事机密、客户名单、财务数据 |
 | 分级决策 | 不同规则可触发 pass/desensitize/warn/block |
-| 规则热加载 | 修改配置后无需重启即可生效 |
+| 规则启停回归 | 完整规则集扩容后，阶段 2 已完成的启停和热加载机制仍可稳定生效 |
 | 绕过防护 | URL 编码、分段、Unicode 混淆等路径被覆盖 |
 
 ### 8.3 验收标准
@@ -496,8 +499,8 @@
 | 文件脱敏重写 MVP（TXT/CSV/DOCX） | F17 | 后续支持文件内容替换与重新生成 |
 | NER 命名实体识别引擎（ONNX Runtime CPU） | F10 | 用于减少规则漏报 |
 | 规则分级决策矩阵正式上线 | 全局 | 统一规则等级、动作与审批关系 |
-| F20 配额与速率限制 | F20 | check_quota / check_rate_limit / update_usage，超额返回 429 |
-| 多上游路由 | F15 | 按 APIKey、模型、capability 选择中转站 |
+| F20 中转站配额与速率观测 | F20 | Provider 支持时只读展示或归档中转站配额/速率状态，不在 SafetyHub 本地做资源配额拦截 |
+| 多上游路由 | F15 | 按 APIKey/provider/租户路由选择上游；模型/token/能力权限仍由中转站判定 |
 | 消息全文搜索 | F11 | 搜索 prompt/response 内容 |
 | 对话回放 | F13 | 按时间顺序展示多轮对话 |
 | 多实例部署 | 部署 | 负载均衡 + 共享存储 |
@@ -554,13 +557,13 @@
 - [x] 请求侧手机号脱敏后再发往中转站
 - [x] 保守关键词命中后返回伪装回复
 - [x] 响应原样透传，不做响应脱敏
-- [ ] Chat 对话记录写入数据库（原始 + 脱敏两份 prompt）
-- [ ] 文生图元数据写入数据库，阶段 3 不保存图片本体
-- [ ] 拦截、脱敏、告警事件有审计记录
-- [ ] 管理后台可访问并查看数据
-- [ ] 管理后台包含仪表盘、拦截记录、消息归档、规则、设置、APIKey 管理、审批记录页面
-- [ ] Request ID、user_id、api_key_id、model、capability 能贯穿归档和审计
-- [ ] APIKey 单条替换与 CSV 批量替换可用
+- [x] Chat 对话记录写入数据库（原始 + 脱敏两份 prompt）
+- [x] 文生图元数据写入数据库，阶段 3 不保存图片本体
+- [x] 拦截、脱敏事件有审计记录；告警事件待阶段 8
+- [x] 管理 API 已受认证保护，最近观测 API 可查看数据；最小管理后台页面已完成，APIKey 页面阶段 5 已升级为可操作页面
+- [x] 管理后台包含仪表盘、拦截记录、消息归档、规则、设置、APIKey 管理、审批记录页面
+- [x] Request ID、user_id、api_key_id、model、capability 能贯穿归档和审计
+- [x] APIKey 单条替换与 CSV 批量替换可用
 
 ### 13.2 性能检查
 
@@ -574,9 +577,9 @@
 
 - [ ] 绕过路径测试覆盖 URL 编码、分段、Unicode 混淆
 - [ ] 日志中不包含 prompt 原文
-- [ ] APIKey 不以明文形式进入日志、数据库明文字段、告警和管理后台列表
-- [ ] 管理后台需要认证
-- [ ] 管理员查看详情、导出、规则操作、Key 替换、审批动作均写入管理员操作审计
+- [x] APIKey 不以明文形式进入日志、数据库明文字段、告警和管理后台列表
+- [x] 管理后台需要认证
+- [x] 管理员查看详情、规则操作、Key 创建/吊销/替换动作均写入管理员操作审计；导出和审批动作待阶段 8/9 启用后补齐
 - [ ] 数据库文件权限正确，仅 app 用户可读写
 - [ ] 文件上传入口默认关闭或限制大小/类型
 - [ ] 没有对外开放非必要端口
@@ -653,7 +656,8 @@
 | KeyProvider 抽象层 | 代码 | 阶段 6 |
 | 中转站联通创建 Key | 代码 | 阶段 6 |
 | DLP 完整规则库 | YAML 配置 | 阶段 7 |
-| 规则热加载与绕过防护 | 代码 | 阶段 7 |
+| 规则启停与热加载 | 代码 | 阶段 2 |
+| 绕过防护与完整规则回归 | 代码 | 阶段 7 |
 | Prometheus 指标与仪表盘 | 代码/配置 | 阶段 8 |
 | 企微/飞书告警推送 | 代码 | 阶段 8 |
 | 审计日志 CSV 导出 | 代码 | 阶段 8 |

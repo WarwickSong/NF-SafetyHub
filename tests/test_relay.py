@@ -449,3 +449,96 @@ def test_generic_json_post_relays_even_with_sensitive_text(relay_test_client, mo
     assert response.json()["ok"] is True
     assert captured["url"] == "https://upstream.example.com/v1/custom/action"
     assert "产品路线图" in captured["body"]
+
+
+def test_chat_completions_stream_archives_complete_sse_response(relay_test_app, monkeypatch):
+    archive_payloads = []
+
+    class FakeArchiveWriter:
+        async def write(self, payload):
+            archive_payloads.append(payload)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        stream_body = (
+            'data: {"choices":[{"delta":{"content":"你"},"finish_reason":null}]}\\n\\n'
+            'data: {"choices":[{"delta":{"content":"好"},"finish_reason":null}]}\\n\\n'
+            'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\\n\\n'
+            'data: [DONE]\\n\\n'
+        )
+        return httpx.Response(200, content=stream_body, headers={"content-type": "text/event-stream"})
+
+    transport = httpx.MockTransport(handler)
+    original_async_client = httpx.AsyncClient
+
+    def build_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", build_client)
+    relay_test_app.state.archive_writer = FakeArchiveWriter()
+
+    with TestClient(relay_test_app) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={"model": "gpt-test", "stream": True, "messages": [{"role": "user", "content": "你好"}]},
+        )
+
+    assert response.status_code == 200
+    assert response.text.endswith("data: [DONE]\\n\\n")
+    assert len(archive_payloads) == 1
+    assert archive_payloads[0].is_stream is True
+    assert archive_payloads[0].response["stream"] is True
+    assert archive_payloads[0].response["message_content"] == "你好"
+    assert '"content":"你"' in archive_payloads[0].response["content"]
+
+
+def test_images_generation_archives_metadata_without_image_body(relay_test_app, monkeypatch):
+    archive_payloads = []
+
+    class FakeArchiveWriter:
+        async def write(self, payload):
+            archive_payloads.append(payload)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "created": 123,
+                "data": [
+                    {"url": "https://cdn.example.com/image-1.png"},
+                    {"b64_json": "base64-image-content"},
+                ],
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    original_async_client = httpx.AsyncClient
+
+    def build_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", build_client)
+    relay_test_app.state.archive_writer = FakeArchiveWriter()
+
+    with TestClient(relay_test_app) as client:
+        response = client.post(
+            "/v1/images/generations",
+            json={"model": "gpt-image", "prompt": "一只猫", "size": "1024x1024", "style": "natural", "n": 2},
+        )
+
+    assert response.status_code == 200
+    assert len(archive_payloads) == 1
+    metadata = archive_payloads[0].image_metadata
+    assert archive_payloads[0].capability == "image"
+    assert archive_payloads[0].prompt_original == "一只猫"
+    assert metadata["prompt"] == "一只猫"
+    assert metadata["model"] == "gpt-image"
+    assert metadata["size"] == "1024x1024"
+    assert metadata["style"] == "natural"
+    assert metadata["n"] == 2
+    assert metadata["response_url_count"] == 1
+    assert metadata["response_urls"] == ["https://cdn.example.com/image-1.png"]
+    assert metadata["response_b64_count"] == 1
+    assert metadata["response_b64_present"] is True
+    assert "base64-image-content" not in metadata.values()

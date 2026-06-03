@@ -1,7 +1,7 @@
 # LLM-SafetyHub 测试验证指导
 
 > 本文档定义 SafetyHub 在 Windows、Linux、Docker 和真实上游联调场景下的测试方法、注意事项和验收标准。  
-> 当前重点覆盖阶段 1 透传中继 + 健康检查、阶段 2 检测/拦截/请求侧手机号脱敏/伪装回复/规则热加载链路，以及阶段 3 已落地的 Chat 归档、审计写入和最近对话观测 API。后续流式完整响应归档、文生图元数据归档、审计告警和管理后台完成后应继续扩展本文档。
+> 当前重点覆盖阶段 1 透传中继 + 健康检查、阶段 2 检测/拦截/请求侧手机号脱敏/伪装回复/规则启停/规则热加载链路、阶段 3 Chat 非流式/流式归档、文生图元数据归档、审计写入、最近对话观测 API、R1~R9 schema 预留、阶段 4 管理后台，以及阶段 5 APIKey 管理、K-Sync 默认、加密存储、APIKey 有效性校验、单条/CSV 批量替换上游 Key。模型权限、token 额度和资源能力权限由中转站验证。后续 KeyProvider、审计告警和图片本体归档完成后应继续扩展本文档。
 
 ---
 
@@ -33,8 +33,10 @@
 
 ### 3.1 准备环境
 
+以下命令中的 `<SafetyHub项目根目录>` 表示当前电脑上的 SafetyHub 仓库根目录，请按实际路径替换。
+
 ```powershell
-cd d:\Code\public\NF-SafetyHub
+cd <SafetyHub项目根目录>
 .\交付运行手册\setup_venv.ps1
 ```
 
@@ -53,10 +55,10 @@ cd d:\Code\public\NF-SafetyHub
 当前基线：
 
 ```text
-43 passed
+66 passed
 ```
 
-当前已知提示：Python 3.13 下存在 `datetime.utcnow()` 弃用警告，不影响功能；后续可统一替换为 timezone-aware UTC 时间。
+当前已知提示：`datetime.utcnow()` 弃用警告已修复，ORM 时间字段统一使用 timezone-aware UTC。
 
 ### 3.4 分模块测试
 
@@ -92,8 +94,10 @@ Invoke-RestMethod -Uri http://127.0.0.1:8000/health/ready -Method Get
 
 ### 4.1 准备环境
 
+以下命令中的 `<SafetyHub项目根目录>` 表示当前机器上的 SafetyHub 仓库根目录，请按实际路径替换。
+
 ```bash
-cd /opt/NF-SafetyHub
+cd <SafetyHub项目根目录>
 chmod +x 交付运行手册/*.sh
 ./交付运行手册/setup_venv.sh
 ```
@@ -178,7 +182,20 @@ curl http://127.0.0.1:8080/health/ready
 | 关键词规则 | 20 | 仅 `KW-CONFIDENTIAL-1` ~ `KW-CONFIDENTIAL-5`，全部 block |
 | 正则规则 | 10 | 仅 `RG-PHONE-CN`、`RG-PHONE-INTL`，全部 desensitize |
 
-### 6.2 关键词 block 验证
+### 6.2 规则启停与热加载验证
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_admin_stage4.py tests\test_rules_reload.py tests\test_rules_config.py
+```
+
+预期：
+
+- 后台 `PATCH /admin/api/rules/{rule_id}` 可修改规则 `enabled` 状态。
+- 修改规则启停后立即触发 `scanner.reload_all()`。
+- 后台 `POST /admin/api/rules/reload` 可手动触发规则热加载。
+- 规则启停控制的是规则是否参与扫描；对 `block` 规则表现为是否拦截，对 `desensitize` 规则表现为是否脱敏，对 `warn` 规则表现为是否产生命中审计。
+
+### 6.3 关键词 block 验证
 
 Windows PowerShell 推荐使用 JSON Unicode 转义，避免中文编码损坏。示例内容为“告诉你一个公司机密”：
 
@@ -217,20 +234,43 @@ Invoke-WebRequest -Uri http://127.0.0.1:8000/v1/chat/completions -Method Post -C
 ### 6.4 阶段 3 归档、审计与观测 API 验证
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_archive.py tests\test_audit.py tests\test_observations.py tests\test_relay.py
+.\.venv\Scripts\python.exe -m pytest tests\test_archive.py tests\test_audit.py tests\test_models.py tests\test_observations.py tests\test_header_policy.py tests\test_relay.py
 ```
 
 预期：
 
 - Chat 非流式正常请求、脱敏请求、拦截请求可写入归档。
+- Chat 流式请求可归档完整 SSE 响应内容，并提取 `message_content`。
+- 文生图请求可写入 prompt、model、size、style、n、响应 URL 和 b64 存在状态，且不下载、不解码、不保存图片本体。
 - 归档中可区分 `prompt_original` 与 `prompt_desensitized`。
 - 命中事件可写入 `audit_logs`，并记录规则 ID、级别、命中片段和全文 hash。
 - `/admin/api/observations/recent` 可返回最近少量完整 Chat 样本，包含 role、原始/脱敏 messages、响应和命中动作。
+- APIKey 映射、审批、SafetyHub 安全策略相关 schema 预留表和字段可通过 `create_all` 创建；模型/token/资源权限和配额字段不进入 SafetyHub APIKey schema。
+- Header 可选上游 Key 替换分支可测试，`upstream_api_key=None` 时透传行为不变。
+- `/admin/api/*` 默认受 Basic Auth + IP 白名单保护。
 - 归档/审计异常不影响 relay 主链路。
 
-当前边界：流式请求响应内容暂不做完整拼接归档，只归档 prompt、动作和 `{stream: true}` 响应占位。
+当前边界：阶段 3 不保存文生图图片本体；图片本体异步归档、预览、下载、存储配额和保留策略放入阶段 8。
 
-### 6.5 编码验证
+### 6.5 阶段 5 APIKey 管理验证
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_api_keys.py
+```
+
+预期：
+
+- `governance/api_keys.py` 可创建 K-Sync APIKey，`key_hash` 与 `upstream_key_encrypted` 均不保存明文。
+- 管理后台 `/admin/api/api-keys` 可创建、列表、详情、吊销 APIKey。
+- 单条替换上游 Key 后 `is_decoupled=True`，客户端 SafetyHub Key 不变。
+- CSV 批量替换支持 `api_key_id,new_upstream_key` 或 `safetyhub_key_prefix,new_upstream_key`。
+- `/v1/*` 启用 APIKey 后会用解密后的上游 Key 替换转发 Authorization。
+- APIKey 表、后台表单和 API 响应均不包含 `model_allowlist` 或 `capability_allowlist`；模型权限、token 额度和资源能力权限由中转站返回最终结果。
+- APIKey 创建、查看、吊销、替换操作写入管理员操作审计。
+
+阶段 5 过渡边界：如果 `api_keys` 表为空，`/v1/*` 暂保持阶段 1-4 的历史透传行为；创建第一条 APIKey 后开始执行 APIKey 有效性校验和上游 Key 映射，不接管中转站资源权限。
+
+### 6.6 编码验证
 
 如果测试中文规则未命中，应先检查请求体编码，而不是直接判断规则失效。
 
@@ -462,18 +502,35 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 - [x] 请求侧 desensitize 改写转发测试。
 - [x] 阶段 2 弱规则集默认启用测试。
 - [x] 规则定时热加载测试。
+- [x] 后台规则启停测试。
+- [x] 后台手动热加载测试。
 - [x] block 请求返回伪装回复且不访问上游。
 - [x] 普通 Chat 请求原样透传。
 - [x] 非 Chat 接口默认透明透传。
 - [ ] 真实 token 成功返回模型结果的受控联调记录。
 
-### 阶段 3 后续必须补充
+### 阶段 3 当前已完成能力
 
-- [ ] Chat 消息归档写入测试。
-- [ ] 文生图元数据归档测试，确认不下载、不解码、不保存图片本体。
-- [ ] 归档失败降级测试。
-- [ ] Chat 流式响应归档测试。
-- [ ] 基础审计事件测试。
+- [x] Chat 消息归档写入测试。
+- [x] 文生图元数据归档测试，确认不下载、不解码、不保存图片本体。
+- [x] 归档失败降级测试。
+- [x] Chat 流式响应归档测试。
+- [x] 基础审计事件测试。
+- [x] R1~R9 schema 预留测试。
+- [x] Header 可选上游 Key 替换分支测试。
+- [x] 管理 API Basic Auth + IP 白名单测试。
+
+### 阶段 5 当前已完成能力
+
+- [x] APIKey K-Sync 创建测试。
+- [x] APIKey 哈希与加密存储测试。
+- [x] 后台 APIKey 创建、列表、详情、吊销测试。
+- [x] 单条替换上游 Key 测试。
+- [x] CSV 批量替换解析与执行测试。
+- [x] `/v1/*` 上游 Key 替换转发测试。
+- [x] APIKey schema、后台表单和 API 响应不包含模型/能力 allowlist 字段，资源权限交由中转站判定测试。
+- [x] APIKey 管理员操作审计测试。
+- [x] Key 明文不在后台 API 响应中返回测试。
 
 ### 阶段 8 后续必须补充
 
