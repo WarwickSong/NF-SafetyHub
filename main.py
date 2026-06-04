@@ -12,12 +12,14 @@ from engine.rules_regex import RegexScanner
 from engine.scanner import ScannerOrchestrator
 from middleware.auth import AdminStaticAuthMiddleware
 from middleware.identity import ApiKeyIdentityMiddleware
+from middleware.request_limit import RequestBodyLimitMiddleware
 from observability.health import router as health_router
 from observability.request_id import RequestIdMiddleware
 from proxy.relay import router as relay_router
 from proxy.upstream_router import get_default_upstream_router
 from storage.database import close_db, get_session_factory, init_db
 from governance.api_keys import ApiKeyService
+from governance.key_provider import create_key_provider
 
 ADMIN_STATIC_DIR = "admin/static"
 
@@ -40,7 +42,8 @@ async def lifespan(app: FastAPI):
     reload_task = asyncio.create_task(periodic_rules_reload(scanner, settings.rules_reload_interval))
     app.state.scanner = scanner
     app.state.session_factory = get_session_factory()
-    app.state.api_key_service = ApiKeyService(app.state.session_factory)
+    app.state.key_provider = create_key_provider(settings)
+    app.state.api_key_service = ApiKeyService(app.state.session_factory, key_provider=app.state.key_provider)
     app.state.upstream_router = get_default_upstream_router()
     app.state.rules_reload_task = reload_task
     try:
@@ -60,6 +63,7 @@ app = FastAPI(
 )
 
 app.add_middleware(RequestIdMiddleware)
+app.add_middleware(RequestBodyLimitMiddleware)
 app.add_middleware(ApiKeyIdentityMiddleware)
 app.add_middleware(AdminStaticAuthMiddleware)
 app.include_router(health_router, prefix="/health", tags=["health"])

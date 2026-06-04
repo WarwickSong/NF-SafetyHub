@@ -1,6 +1,6 @@
 # LLM-SafetyHub 前端功能与开发规划
 
-> 本文档定义 SafetyHub 管理员前端的页面范围、功能边界、接口依赖、开发阶段和验收标准。前端定位为轻量管理后台，服务于安全管理员查看数据、处理告警、管理规则和后续扩展 APIKey 映射、安全策略、审批、文件安全能力。模型权限、token 额度和资源能力权限由中转站管理，不作为 SafetyHub 前端默认权限配置对象。
+> 本文档定义 SafetyHub 管理员前端的页面范围、功能边界、接口依赖、开发阶段和验收标准。前端定位为轻量管理后台，当前开发范围收敛到阶段 6 及之前的生产上线完善；阶段 7 及之后前端增强暂不开发，仅作为长期规划保留。模型权限、token 额度和资源能力权限由中转站管理，不作为 SafetyHub 前端默认权限配置对象。
 
 ---
 
@@ -8,11 +8,11 @@
 
 SafetyHub 前端是 **管理员管理后台**，不面向普通终端用户。核心目标是：
 
-1. **可视化安全态势** — 展示请求量、拦截数、告警数、活跃用户、规则命中趋势
-2. **查询与追溯** — 查询消息归档、审计日志、拦截记录，支持详情查看和导出
+1. **可视化安全态势** — 展示阶段 6 及之前已有统计数据，告警数和趋势增强仅保留为长期规划
+2. **查询与追溯** — 查询消息归档、审计日志、拦截记录，支持详情查看；导出能力仅保留为长期规划
 3. **上线观测验证** — 上线初期提供临时观测窗口，查看最近少量完整 Chat 对话及 role 结构，用真实样本校验误拦截/误脱敏
-4. **规则运营** — 查看规则、启停规则、观察命中效果，为后续规则编辑预留入口
-5. **告警与审批** — 查看告警记录、审批记录，为临时放行审批预留操作入口
+4. **规则运营** — 查看规则、启停规则、观察命中效果，阶段 7 完整规则编辑暂不开发
+5. **告警与审批** — 告警记录和审批处理暂不开发，仅保留入口或长期规划说明
 6. **APIKey 映射与安全策略预留** — 为 APIKey 映射、上游 Key 替换、安全策略、多上游路由预留页面和接口字段；模型/token/资源权限由中转站管理
 7. **系统配置** — 展示运行状态、Webhook、数据保留、健康检查、版本信息等配置
 
@@ -205,7 +205,7 @@ admin/static/
 |------|------|
 | `GET /admin/api/audits` | 安全审计列表 |
 | `GET /admin/api/admin-ops` | 管理员操作审计列表 |
-| `GET /admin/api/audits/export` | 安全审计导出 |
+| `GET /admin/api/audits/export` | 安全审计导出，阶段 8 启用 |
 
 **验收标准**
 
@@ -280,7 +280,7 @@ admin/static/
 
 | 功能 | 阶段 4 | 阶段 5 | 阶段 6 | 阶段 9 |
 |------|--------|--------|--------|--------|
-| APIKey 页面 | 只读占位 + 字段说明 | 创建、列表、吊销、手动录入、单条/批量替换 | 通过中转站 Provider 一键创建 | 关联 SafetyHub 安全策略 + 关联审批链 |
+| APIKey 页面 | 只读占位 + 字段说明 | 创建、列表、吊销、手动录入、单条/批量替换 | 已支持手动录入/Provider 创建、reveal/复制完整 Key、Provider-aware 吊销 | 关联 SafetyHub 安全策略 + 关联审批链 |
 | K-Sync | — | 默认启用，前哨站 Key = 中转站 Key | 保持兼容 | 保持兼容 |
 | K-Decoupled | — | 上游 Key 被替换后自动进入 | Provider 创建/迁移时启用 | 保持兼容 |
 | 模型/token/资源权限 | — | 中转站管理，SafetyHub 不配置 | 中转站 Provider 创建后在中转站侧配置和生效 | 同阶段 6 |
@@ -309,12 +309,12 @@ admin/static/
 | 名称 | 用户在创建时填写的备注名 |
 | SafetyHub Key 前后缀 | K-Sync 下展示中转站 Key 前后缀；K-Decoupled 下展示 `sk-sh-` 前后缀 |
 | 模式 | `K-Sync` / `K-Decoupled`，来自 `is_decoupled` |
-| 中转站 Provider | `passthrough` / `static` / `oneapi` / `openai_compat` |
+| 中转站 Provider | 当前支持 `passthrough` / `static` / `oneapi_nanfu_yxai`；未来扩展 `openai_compat` |
 | 中转站 Key 前后缀 | 永远不展示明文 |
 | 资源权限状态 | 展示“由中转站管理”，可跳转中转站控制台或展示 Provider 引用信息 |
 | 状态 | active / revoked / expired |
 | 创建时间 / 过期时间 | — |
-| 操作 | 查看详情 / 吊销 / 替换上游 Key |
+| 操作 | 显示/隐藏完整 Key、复制完整 Key、查看详情、吊销、替换上游 Key；显示/复制需调用受审计 reveal 接口 |
 
 **创建表单（阶段 5 K-Sync 默认）**
 
@@ -346,7 +346,7 @@ admin/static/
 | 区块 | 内容 |
 |------|------|
 | 基本信息 | 名称、所属用户、状态、Provider、K-Sync/K-Decoupled 模式 |
-| Key 信息 | SafetyHub Key 前后缀 / 中转站 Key 前后缀（永不展示明文） |
+| Key 信息 | SafetyHub Key 前后缀 / 中转站 Key 前后缀；默认不展示明文，管理员可通过 reveal 接口按需显示/复制完整 SafetyHub Key并写入审计 |
 | 资源权限 | 显示“由中转站管理”，SafetyHub 不展示或编辑模型/token/能力权限明细 |
 | 上游替换 | "替换上游 Key"按钮 + 最近一次替换时间 + 替换人 |
 | 关联记录 | 跳转到该 Key 的归档与审计列表 |
@@ -380,10 +380,11 @@ admin/static/
 
 | 能力 | 前端表现 |
 |------|---------|
-| Provider 自动创建 | 创建表单新增"由中转站自动创建"选项，SafetyHub 传递名称/owner/备注等元数据并保存中转站返回的 upstream_key |
-| Provider 切换 | 设置页选择 `oneapi` / `static` / `openai_compat` |
-| 路径 C 自动续约 | APIKey 列表新增"通过新中转站重新创建并替换"批量操作 |
-| 迁移进度 | 展示总数、成功、失败、可重试记录 |
+| Provider 自动创建 | ✅ 创建表单已新增“由 KeyProvider 创建”选项，SafetyHub 传递名称/owner/metadata 并保存中转站返回的 upstream_key，默认 K-Sync |
+| 完整 Key reveal/复制 | ✅ 列表默认展示脱敏 Key，旁边提供“复制”“显示/隐藏”按钮，点击时调用 `/admin/api/api-keys/{id}/reveal` 并写入审计 |
+| Provider 切换 | ⏳ 设置页选择 `oneapi_nanfu_yxai` / `static` / 未来 `openai_compat`，切换演练页待实现 |
+| 路径 C 自动续约 | ⏳ APIKey 列表新增"通过新中转站重新创建并替换"批量操作，待实现 |
+| 迁移进度 | ⏳ 展示总数、成功、失败、可重试记录，待实现 |
 
 #### 4.7.5 接口依赖
 
@@ -392,12 +393,13 @@ admin/static/
 | `GET /admin/api/api-keys` | 阶段 5 | 分页查询 APIKey 列表 |
 | `GET /admin/api/api-keys/{id}` | 阶段 5 | APIKey 详情 |
 | `POST /admin/api/api-keys` | 阶段 5 | 创建 K-Sync APIKey / 阶段 6 由 Provider 创建 |
-| `POST /admin/api/api-keys/{id}/revoke` | 阶段 5 | 吊销 APIKey |
+| `POST /admin/api/api-keys/{id}/revoke` | 阶段 5/6 | 吊销 APIKey；Provider Key 会先同步吊销中转站 Key，成功后才标记本地 revoked |
+| `POST /admin/api/api-keys/{id}/reveal` | 阶段 6 | 按需返回完整 SafetyHub Key，用于后台显示/复制，写入管理员操作审计并设置 no-store |
 | `POST /admin/api/api-keys/{id}/replace-upstream-key` | 阶段 5 | 单条替换上游 Key |
 | `POST /admin/api/api-keys/bulk-replace-upstream-keys` | 阶段 5 | CSV 批量替换上游 Key |
-| `POST /admin/api/api-keys/provider-migrate` | 阶段 6 | 路径 C 自动续约迁移 |
-| 中转站控制台链接或 Provider 引用 | 阶段 6 | 查看或跳转中转站侧模型/token/资源权限配置，SafetyHub 不作为权限权威 |
-| `GET /admin/api/upstream-routes` | 阶段 6 | 上游路由策略 |
+| `POST /admin/api/api-keys/provider-migrate` | 阶段 6 迁移增强 | 路径 C 自动续约迁移，当前待实现 |
+| 中转站控制台链接或 Provider 引用 | 阶段 6 迁移增强 / 阶段 10 观测 | 查看或跳转中转站侧模型/token/资源权限配置，SafetyHub 不作为权限权威 |
+| `GET /admin/api/upstream-routes` | 阶段 6 迁移增强 | 上游路由策略，当前待实现 |
 
 #### 4.7.6 验收标准
 
@@ -411,15 +413,17 @@ admin/static/
 **阶段 5**
 
 - [x] 能手动录入已有中转站 Key，默认 K-Sync 使用
-- [x] 列表页只展示 Key 前后缀，永不展示明文
+- [x] 列表页默认只展示 Key 前后缀；完整 Key 仅通过受审计 reveal 接口按需显示/复制
 - [x] 单条替换上游 Key 后，客户端使用的 SafetyHub Key 不变
 - [x] CSV 批量替换支持执行和成功/失败结果汇总；独立上传预览与二次确认作为阶段 6/8 前端增强
 - [x] APIKey 创建、查看详情、吊销、替换动作均触发管理员操作审计
 
 **阶段 6**
 
-- [ ] 能在管理后台通过 Provider 创建中转站 Key
-- [ ] 切换 Provider 后前端代码零改动仍能正常使用
+- [x] 能在管理后台通过 Provider 创建中转站 Key
+- [x] 完整 SafetyHub Key 支持受审计 reveal/复制，列表默认不返回明文
+- [x] Provider-aware 吊销先同步删除中转站 Key，成功后才标记本地 revoked
+- [ ] 切换 Provider 演练后前端代码零改动仍能正常使用
 - [ ] 自动续约迁移支持进度展示、失败重试和结果导出
 
 **阶段 9**
@@ -723,36 +727,42 @@ admin/static/
 
 | 页面/能力 | 任务 |
 |----------|------|
-| APIKey 列表 | 展示 Key 前后缀、K-Sync/K-Decoupled 模式、Provider、权限、状态 |
+| APIKey 列表 | 展示 Key 前后缀、K-Sync/K-Decoupled 模式、Provider、资源权限边界、状态 |
 | APIKey 创建 | 手动录入已有中转站 Key，默认 K-Sync |
-| APIKey 详情 | 展示权限、关联归档审计、操作日志 |
+| APIKey 详情 | 展示资源权限由中转站管理、关联归档审计、操作日志 |
 | 单条替换上游 Key | 弹窗输入新中转站 Key，二次确认客户端 Key 不变 |
-| CSV 批量替换 | 模板下载、上传预览、执行替换、结果下载 |
-| 资源权限提示 | 展示“模型/token/资源权限由中转站管理”，可提供中转站控制台跳转 |
+| CSV 批量替换 | 执行替换并展示成功/失败结果；独立上传预览和结果下载作为后续增强 |
+| 资源权限提示 | 展示“模型/token/资源权限由中转站管理”，不提供 SafetyHub 本地权限表单 |
 
 **验收标准**
 
-- [ ] 能手动录入历史中转站 Key 并默认 K-Sync 使用
-- [ ] 单条替换和批量替换后客户端 Key 不变
-- [ ] 所有 Key 只展示前后缀，不展示明文
-- [ ] 创建、吊销、替换均写入管理员操作审计
+- [x] 能手动录入历史中转站 Key 并默认 K-Sync 使用
+- [x] 单条替换和批量替换后客户端 Key 不变
+- [x] 所有 Key 列表默认只展示前后缀，完整 Key 仅通过受审计 reveal 接口按需展示/复制
+- [x] 创建、查看、reveal、吊销、替换均写入管理员操作审计
 
 ### 7.4 阶段 6：KeyProvider 与中转站联通 UI
 
 | 页面/能力 | 任务 |
 |----------|------|
-| Provider 设置 | 选择 `passthrough` / `static` / `oneapi` / `openai_compat` |
-| 自动创建 Key | 创建表单支持“由中转站自动创建” |
-| 自动续约迁移 | 展示迁移进度、成功/失败、失败重试 |
-| 批量导入 | CSV / 表单粘贴 / 导入结果页 |
+| Provider 创建 | 创建表单支持“由 KeyProvider 创建”，当前支持 `oneapi_nanfu_yxai`、`static`、`passthrough` 后端类型 |
+| 完整 Key reveal/复制 | 调用受审计 reveal 接口，设置 no-store，列表默认不返回明文 |
+| Provider-aware 吊销 | 中转站删除成功后才标记本地 revoked，失败时返回错误不假成功 |
+| Provider 切换演练 | 验证 `oneapi_nanfu_yxai` ↔ `static` 切换时前端和核心链路零改动 |
+| 自动续约迁移 | 展示迁移进度、成功/失败、失败重试，作为阶段 6 迁移增强待实现 |
+| 批量导入增强 | CSV / 表单粘贴 / 导入结果页，作为后续增强；当前已有 JSON 导入脚本能力 |
 
 **验收标准**
 
-- [ ] Provider 切换后前端调用接口不变
-- [ ] 中转站一键创建 Key 可用
+- [x] 中转站一键创建 Key 可用
+- [x] 完整 Key reveal/复制可用且写入管理员操作审计
+- [x] Provider-aware 吊销可用
+- [ ] Provider 切换演练后前端调用接口不变
 - [ ] 自动续约迁移有进度和失败重试
 
-### 7.5 阶段 7~10：增强能力页面
+### 7.5 阶段 7~10：增强能力页面（暂不开发）
+
+阶段 7 及之后的前端增强暂不开发，以下页面能力仅作为长期规划保留，不纳入当前生产上线范围。
 
 | 产品阶段 | 页面/能力 | 任务 |
 |---------|----------|------|
@@ -761,12 +771,12 @@ admin/static/
 | 阶段 9 审批与策略 | 安全策略 / 审批链 | SecurityPolicy、ApprovalChain 创建、编辑、绑定到 Key |
 | 阶段 10 远期能力 | 文件安全 / 配额 / 多租户 | 文件扫描记录、配额视图、多租户配置、SSO 预留 |
 
-**验收标准**
+**长期规划验收标准**
 
 - [ ] 阶段 7 规则管理可支撑完整规则集上线
 - [ ] 阶段 8 告警和统计页面能辅助误报分析
 - [ ] 阶段 9 APIKey 详情可绑定策略和审批链
-- [ ] 阶段 10 远期能力页面不影响阶段 1~9 主链路
+- [ ] 阶段 10 远期能力页面不影响阶段 1~6 生产主链路
 
 ---
 
@@ -807,7 +817,7 @@ admin/static/
 | 规则管理 | 阶段 2 启停/热加载 + 阶段 4 页面承载 | 支持展示阶段 2 弱扫描规则集、启停单条规则和手动热加载；编辑和回滚阶段 7 启用 |
 | APIKey 映射编辑 | 阶段 5 | 阶段 4 只预留入口；阶段 5 启用 K-Sync、APIKey 有效性校验、上游 Key 单条/批量替换；模型/token/资源权限由中转站管理 |
 | Provider 联通创建 | 阶段 6 | 阶段 5 可手动录入；阶段 6 再通过中转站接口自动创建 |
-| 临时审批操作 | 阶段 9 | 阶段 4 只预留页面，阶段 9 启用审批处理 |
-| 文件安全操作 | 阶段 10 | 文件能力默认关闭或白名单启用 |
-| SSO/角色权限 | 阶段 10 | 阶段 4 使用轻量管理员认证，后续可替换 SSO |
+| 临时审批操作 | 阶段 9 暂不开发 | 阶段 4 只预留页面，生产上线前不启用审批处理 |
+| 文件安全操作 | 阶段 10 暂不开发 | 生产上线前不启用文件能力，当前仅保留远期规划 |
+| SSO/角色权限 | 阶段 10 暂不开发 | 阶段 4 使用轻量管理员认证，SSO/角色权限仅保留远期规划 |
 | 前端复杂框架 | 不需要 | 当前页面复杂度不高，静态 HTML/JS 足够 |

@@ -133,9 +133,25 @@ def test_admin_login_sets_cookie_for_static_pages_and_api():
 
     assert login_response.status_code == 200
     assert login_response.json()["status"] == "ok"
+    assert "secure" not in login_response.headers["set-cookie"].lower()
     assert page_response.status_code == 200
     assert "SafetyHub 管理后台" in page_response.text
     assert api_response.status_code == 200
+
+
+def test_admin_login_sets_secure_cookie_in_production():
+    app = create_static_test_app(
+        Settings(environment="production", admin_password="strong-local-password")
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/admin/api/login",
+            json={"username": "admin", "password": "strong-local-password"},
+        )
+
+    assert response.status_code == 200
+    assert "secure" in response.headers["set-cookie"].lower()
 
 
 def test_admin_login_rejects_wrong_password():

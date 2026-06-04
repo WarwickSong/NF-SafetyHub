@@ -20,6 +20,7 @@ from admin.schemas import (
     ApiKeyListResponse,
     ApiKeyMutationResponse,
     ApiKeyReplaceRequest,
+    ApiKeyRevealResponse,
     ArchiveDetail,
     ArchiveListResponse,
     ArchiveStatsResponse,
@@ -27,6 +28,8 @@ from admin.schemas import (
     AuditDetail,
     AuditListResponse,
     AuditSummary,
+    ImageAssetItem,
+    ImageAssetListResponse,
     ObservationItem,
     ObservationListResponse,
     Pagination,
@@ -39,13 +42,15 @@ from admin.schemas import (
     TrendPoint,
 )
 from config import settings
-from governance.api_keys import ApiKeyCreate, ApiKeyService, parse_bulk_replace_csv
+from governance.api_keys import ApiKeyCreate, ApiKeyService, key_prefix, key_suffix, parse_bulk_replace_csv
+from governance.key_provider import KeyProviderError
 from middleware.auth import clear_admin_session_cookie, require_admin_access, set_admin_session_cookie, validate_admin_login
 from storage.admin_ops import AdminOperationPayload, AdminOperationQuery, AdminOperationReader, AdminOperationWriter
 from storage.archive import ArchiveQuery, ArchiveReader
 from storage.audit import AuditQuery, AuditReader
 from storage.database import get_session_factory
-from storage.models import AdminOperation, ApiKeyRecord, AuditLog, MessageArchive
+from storage.image_assets import ImageAssetReader
+from storage.models import AdminOperation, ApiKeyRecord, AuditLog, ImageAsset, MessageArchive
 
 router = APIRouter(dependencies=[Depends(require_admin_access)])
 
@@ -143,6 +148,18 @@ async def get_archive(request: Request, archive_id: int):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Archive not found")
     await _write_admin_operation(request, "archive.view_detail", "archive", str(archive_id))
     return _archive_to_detail(archive)
+
+
+@router.get("/image-assets", response_model=ImageAssetListResponse)
+async def list_image_assets(
+    request: Request,
+    request_id: str | None = None,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+):
+    assets = await _image_asset_reader(request).list(request_id=request_id, limit=limit, offset=offset)
+    await _write_admin_operation(request, "image_asset.list", "image_asset", request_id or "all")
+    return ImageAssetListResponse(items=[_image_asset_to_item(asset) for asset in assets])
 
 
 @router.get("/audits", response_model=AuditListResponse)
@@ -289,8 +306,12 @@ async def create_api_key(request: Request, payload: ApiKeyCreateRequest):
                 provider_name=payload.provider_name,
                 owner_department=payload.owner_department,
                 cost_center=payload.cost_center,
+                create_mode=payload.create_mode,
+                metadata=payload.metadata,
             )
         )
+    except KeyProviderError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     await _write_admin_operation(request, "api_key.create", "api_key", result.record.id)
@@ -306,9 +327,24 @@ async def get_api_key(request: Request, api_key_id: str):
     return _api_key_to_item(record)
 
 
+@router.post("/api-keys/{api_key_id}/reveal", response_model=ApiKeyRevealResponse)
+async def reveal_api_key(request: Request, response: Response, api_key_id: str):
+    raw_key = await _api_key_service(request).reveal_safetyhub_key(api_key_id)
+    if raw_key is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="APIKey not found")
+    if not raw_key:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="APIKey secret is not available")
+    response.headers["Cache-Control"] = "no-store"
+    await _write_admin_operation(request, "api_key.reveal", "api_key", api_key_id)
+    return ApiKeyRevealResponse(status="ok", api_key_id=api_key_id, key=raw_key, key_prefix=key_prefix(raw_key), key_suffix=key_suffix(raw_key))
+
+
 @router.post("/api-keys/{api_key_id}/revoke", response_model=ApiKeyMutationResponse)
 async def revoke_api_key(request: Request, api_key_id: str):
-    record = await _api_key_service(request).revoke(api_key_id)
+    try:
+        record = await _api_key_service(request).revoke(api_key_id)
+    except KeyProviderError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="APIKey not found")
     await _write_admin_operation(request, "api_key.revoke", "api_key", api_key_id)
@@ -355,12 +391,16 @@ def _admin_operation_reader(request: Request) -> AdminOperationReader:
     return getattr(request.app.state, "admin_operation_reader", None) or AdminOperationReader(_session_factory(request))
 
 
+def _image_asset_reader(request: Request) -> ImageAssetReader:
+    return getattr(request.app.state, "image_asset_reader", None) or ImageAssetReader(_session_factory(request))
+
+
 def _admin_operation_writer(request: Request) -> AdminOperationWriter:
     return getattr(request.app.state, "admin_operation_writer", None) or AdminOperationWriter(_session_factory(request))
 
 
 def _api_key_service(request: Request) -> ApiKeyService:
-    return getattr(request.app.state, "api_key_service", None) or ApiKeyService(_session_factory(request))
+    return getattr(request.app.state, "api_key_service", None) or ApiKeyService(_session_factory(request), key_provider=getattr(request.app.state, "key_provider", None))
 
 
 def _session_factory(request: Request):
@@ -453,6 +493,24 @@ def _admin_operation_to_item(operation: AdminOperation) -> AdminOperationItem:
         resource_type=operation.resource_type,
         resource_id=operation.resource_id,
         created_at=operation.created_at,
+    )
+
+
+def _image_asset_to_item(asset: ImageAsset) -> ImageAssetItem:
+    return ImageAssetItem(
+        id=asset.id,
+        request_id=asset.request_id,
+        source_index=asset.source_index,
+        source_type=asset.source_type,
+        source_url=asset.source_url or "",
+        status=asset.status,
+        local_path=asset.local_path or "",
+        sha256=asset.sha256 or "",
+        mime_type=asset.mime_type or "",
+        size_bytes=asset.size_bytes or 0,
+        error=asset.error or "",
+        created_at=asset.created_at,
+        completed_at=asset.completed_at,
     )
 
 

@@ -2,7 +2,7 @@ import pytest
 from sqlalchemy import inspect, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from storage.models import ApiKeyRecord, ApprovalChain, ApprovalRequest, Base, SecurityPolicy
+from storage.models import ApiKeyRecord, ApprovalChain, ApprovalRequest, Base, ImageAsset, SecurityPolicy
 
 
 @pytest.mark.asyncio
@@ -13,6 +13,7 @@ async def test_stage3_reserved_tables_are_created_with_required_columns():
         table_names = await conn.run_sync(lambda sync_conn: set(inspect(sync_conn).get_table_names()))
         api_key_columns = await conn.run_sync(lambda sync_conn: {column["name"] for column in inspect(sync_conn).get_columns("api_keys")})
         approval_request_columns = await conn.run_sync(lambda sync_conn: {column["name"] for column in inspect(sync_conn).get_columns("approval_requests")})
+        image_asset_columns = await conn.run_sync(lambda sync_conn: {column["name"] for column in inspect(sync_conn).get_columns("image_assets")})
 
     assert {
         "message_archives",
@@ -21,6 +22,7 @@ async def test_stage3_reserved_tables_are_created_with_required_columns():
         "approval_requests",
         "security_policies",
         "approval_chains",
+        "image_assets",
     }.issubset(table_names)
     assert {
         "provider_name",
@@ -32,6 +34,19 @@ async def test_stage3_reserved_tables_are_created_with_required_columns():
         "cost_center",
     }.issubset(api_key_columns)
     assert {"chain_id", "current_level", "escalated_at"}.issubset(approval_request_columns)
+    assert {
+        "request_id",
+        "source_index",
+        "source_type",
+        "source_url",
+        "status",
+        "local_path",
+        "sha256",
+        "mime_type",
+        "size_bytes",
+        "error",
+        "completed_at",
+    }.issubset(image_asset_columns)
 
     await engine.dispose()
 
@@ -48,7 +63,8 @@ async def test_stage3_reserved_model_defaults_are_safe():
         approval = ApprovalRequest(id="approval_1", request_id="req_1")
         policy = SecurityPolicy(id="policy_1", name="default")
         chain = ApprovalChain(id="chain_1", name="default")
-        session.add_all([api_key, approval, policy, chain])
+        image_asset = ImageAsset(request_id="req_1", source_type="b64_json")
+        session.add_all([api_key, approval, policy, chain, image_asset])
         await session.commit()
 
     async with session_factory() as session:
@@ -56,6 +72,7 @@ async def test_stage3_reserved_model_defaults_are_safe():
         stored_approval = await session.scalar(select(ApprovalRequest).where(ApprovalRequest.id == "approval_1"))
         stored_policy = await session.scalar(select(SecurityPolicy).where(SecurityPolicy.id == "policy_1"))
         stored_chain = await session.scalar(select(ApprovalChain).where(ApprovalChain.id == "chain_1"))
+        stored_image_asset = await session.scalar(select(ImageAsset).where(ImageAsset.request_id == "req_1"))
 
     assert stored_key.provider_name == "passthrough"
     assert stored_key.is_decoupled is False
@@ -66,5 +83,8 @@ async def test_stage3_reserved_model_defaults_are_safe():
     assert stored_approval.escalated_at is None
     assert stored_policy.rule_overrides == "{}"
     assert stored_chain.chain_definition == "[]"
+    assert stored_image_asset.status == "pending"
+    assert stored_image_asset.size_bytes == 0
+    assert stored_image_asset.local_path == ""
 
     await engine.dispose()

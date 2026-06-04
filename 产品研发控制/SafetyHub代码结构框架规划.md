@@ -6,7 +6,7 @@
 
 ## 一、项目目录结构
 
-当前代码结构如下；KeyProvider、告警、图片资产、文件安全等后续阶段模块在对应阶段创建。
+当前代码结构如下；阶段 1~6 核心能力已落地，KeyProvider 抽象、Provider 实现、APIKey 管理、文生图图片资产归档和后台页面已进入当前结构。当前开发范围收敛到阶段 6 及之前的生产上线完善；阶段 7 及之后暂不开发，告警、图片资产治理增强、文件安全运行模块仅保留规划，不作为当前上线阻塞项。
 
 ```text
 NF-SafetyHub/
@@ -28,8 +28,14 @@ NF-SafetyHub/
 │   ├── rules_regex.py
 │   └── scanner.py
 ├── governance/
+│   ├── providers/
+│   │   ├── __init__.py
+│   │   ├── oneapi_nanfu_yxai.py
+│   │   ├── passthrough.py
+│   │   └── static_key.py
 │   ├── __init__.py
-│   └── api_keys.py
+│   ├── api_keys.py
+│   └── key_provider.py
 ├── file_security/
 │   └── __init__.py
 ├── observability/
@@ -37,6 +43,7 @@ NF-SafetyHub/
 │   └── request_id.py
 ├── storage/
 │   ├── migrations/
+│   │   └── .gitkeep
 │   ├── admin_ops.py
 │   ├── archive.py
 │   ├── audit.py
@@ -65,6 +72,7 @@ NF-SafetyHub/
 ├── nginx/
 │   └── nginx.conf
 ├── scripts/
+│   ├── import_yxai_keys.py
 │   └── init_db.py
 ├── tests/
 │   ├── test_admin_auth.py
@@ -85,6 +93,8 @@ NF-SafetyHub/
 │   ├── test_scanner.py
 │   └── test_upstream_router.py
 ├── verify/
+│   ├── verify_chat_non_stream.py
+│   └── verify_chat_stream.py
 ├── 交付运行手册/
 ├── 产品研发控制/
 ├── Dockerfile
@@ -104,75 +114,109 @@ NF-SafetyHub/
 ### 2.1 `main.py` — 应用入口
 
 ```python
+import asyncio
 from contextlib import asynccontextmanager
+from contextlib import suppress
+
 from fastapi import FastAPI
-from config import settings
-from proxy.relay import router as relay_router
+from fastapi.staticfiles import StaticFiles
+
 from admin.router import router as admin_router
-from middleware.auth import AdminAuthMiddleware
-from middleware.logging import RequestLoggingMiddleware
-from middleware.error_handler import register_exception_handlers
-from storage.database import init_db, close_db
-from engine.scanner import ScannerOrchestrator
+from config import settings, validate_startup_settings
 from engine.rules_keyword import KeywordScanner
 from engine.rules_regex import RegexScanner
-from notify.webhook import WebhookNotifier
+from engine.scanner import ScannerOrchestrator
+from governance.api_keys import ApiKeyService
+from governance.key_provider import create_key_provider
+from middleware.auth import AdminStaticAuthMiddleware
+from middleware.identity import ApiKeyIdentityMiddleware
+from observability.health import router as health_router
+from observability.request_id import RequestIdMiddleware
+from proxy.relay import router as relay_router
+from proxy.upstream_router import get_default_upstream_router
+from storage.database import close_db, get_session_factory, init_db
+
+ADMIN_STATIC_DIR = "admin/static"
+
+
+async def periodic_rules_reload(scanner: ScannerOrchestrator, interval_seconds: int) -> None:
+    interval = max(1, interval_seconds)
+    while True:
+        await asyncio.sleep(interval)
+        with suppress(Exception):
+            await scanner.reload_all()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    validate_startup_settings(settings)
     await init_db()
     scanner = ScannerOrchestrator()
     scanner.register(KeywordScanner(settings.rules_config_path))
     scanner.register(RegexScanner(settings.rules_config_path))
+    reload_task = asyncio.create_task(periodic_rules_reload(scanner, settings.rules_reload_interval))
     app.state.scanner = scanner
-    app.state.notifier = WebhookNotifier(settings.webhook_url)
-    yield
-    await close_db()
+    app.state.session_factory = get_session_factory()
+    app.state.key_provider = create_key_provider(settings)
+    app.state.api_key_service = ApiKeyService(app.state.session_factory, key_provider=app.state.key_provider)
+    app.state.upstream_router = get_default_upstream_router()
+    app.state.rules_reload_task = reload_task
+    try:
+        yield
+    finally:
+        reload_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await reload_task
+        await close_db()
 
 
 app = FastAPI(
-    title="LLM-SafetyHub",
-    version="1.0.0",
+    title=settings.app_name,
+    version="0.1.0",
+    debug=settings.debug,
     lifespan=lifespan,
 )
 
-app.add_middleware(AdminAuthMiddleware)
-app.add_middleware(RequestLoggingMiddleware)
-register_exception_handlers(app)
-
-app.include_router(relay_router, prefix="/v1")
-app.include_router(admin_router, prefix="/admin")
+app.add_middleware(RequestIdMiddleware)
+app.add_middleware(ApiKeyIdentityMiddleware)
+app.add_middleware(AdminStaticAuthMiddleware)
+app.include_router(health_router, prefix="/health", tags=["health"])
+app.include_router(admin_router, prefix="/admin/api", tags=["admin"])
+app.include_router(relay_router, prefix="/v1", tags=["relay"])
+app.mount("/admin", StaticFiles(directory=ADMIN_STATIC_DIR, html=True), name="admin")
 ```
 
 **职责**
 
 - FastAPI 应用创建和生命周期管理
-- 中间件注册
-- 路由注册
-- Scanner 和 Notifier 的初始化和注入
+- 启动配置校验、数据库初始化和连接释放
+- Scanner 初始化、定时规则热加载和注入
+- KeyProvider、ApiKeyService、上游路由初始化和注入
+- Request ID、APIKey 身份、后台静态页认证中间件注册
+- 健康检查、管理 API、中继路由和后台静态页面挂载
 
 ---
 
 ### 2.2 `config.py` — 配置管理
 
 ```python
-from pydantic_settings import BaseSettings
 from pathlib import Path
+from pydantic import Field
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
     app_name: str = "LLM-SafetyHub"
-    debug: bool = False
+    environment: str = "development"
+    debug: bool = True
 
-    upstream_url: str                          # 默认中转站地址
+    upstream_url: str = ""                     # 默认中转站地址
     upstream_timeout_connect: int = 10         # 连接超时(秒)
     upstream_timeout_read: int = 120           # 读取超时(秒)
-    upstream_route_config_path: Path = Path("config/upstream_routes.yaml")
 
     rules_config_path: Path = Path("engine/rules_config.yaml")
     rules_reload_interval: int = 5             # 规则热加载间隔(秒)
-    scanner_order: list[str] = ["keyword", "regex"]
+    scanner_order: list[str] = Field(default_factory=lambda: ["keyword", "regex"])
 
     db_url: str = "sqlite+aiosqlite:///./data/safetyhub.db"
     archive_retention_days: int = 180
@@ -180,12 +224,26 @@ class Settings(BaseSettings):
     data_encryption_enabled: bool = False
     data_encryption_key_env: str = "SAFETYHUB_DATA_KEY"
 
-    admin_username: str = "admin"
-    admin_password: str                         # 环境变量注入
-    admin_ip_whitelist: list[str] = []
+    key_provider_type: str = "passthrough"
+    key_provider_admin_token: str = ""
+    key_provider_base_url: str = ""
+    key_provider_username: str = ""
+    key_provider_password_env: str = "KEY_PROVIDER_PASSWORD"
+    key_provider_auth_version: str = ""
+    key_provider_default_remain_quota: int = 1000000
+    key_provider_default_unlimited_quota: bool = True
+    key_provider_timeout_seconds: int = 30
+    key_provider_login_retries: int = 3
+    key_provider_login_retry_delay_seconds: float = 10
+    key_provider_request_retries: int = 3
+    key_provider_request_retry_delay_seconds: float = 2
 
-    webhook_url: str = ""
-    webhook_type: str = "wecom"                 # wecom / feishu
+    admin_username: str = "admin"
+    admin_password: str = ""                   # 环境变量注入
+    admin_ip_whitelist: list[str] = Field(default_factory=list)
+
+    webhook_url: str = ""                      # 阶段 8 告警启用时使用
+    webhook_type: str = "wecom"                # wecom / feishu
     approval_webhook_url: str = ""
     approval_timeout_minutes: int = 30
     alert_silence_rule_minutes: int = 5
@@ -215,8 +273,9 @@ settings = Settings()
 - 敏感配置（密码、Webhook URL、加密密钥、上游 Key）通过环境变量注入，不硬编码
 - 启动时进行配置校验，生产环境缺少 `admin_password`、`upstream_url` 或弱密码时直接启动失败
 - 规则文件路径可配置，方便测试时使用不同的规则集
-- APIKey 与模型权限配置先预留文件和数据结构，阶段 1~4 默认走单上游，阶段 5 启用 APIKey 与模型权限，阶段 6 后逐步启用多上游和细粒度授权
-- 数据保留、文件扫描、临时审批默认可关闭，避免 MVP 阶段扩大实现范围
+- APIKey 与上游 Key 映射配置已在阶段 5/6 启用；模型权限、token 额度、速率限制和资源能力权限由中转站作为权威系统管理，SafetyHub 不做本地资源授权判定
+- KeyProvider 配置支持 `passthrough` / `static` / `oneapi_nanfu_yxai`，通用 `openai_compat` 和自动续约迁移留待后续增强
+- 数据保留、文件扫描、临时审批和告警默认可关闭，避免 MVP 阶段扩大实现范围
 
 ---
 
@@ -231,8 +290,6 @@ from proxy.fake_response import generate_fake_response
 from proxy.stream import SSEStreamProxy
 from storage.archive import ArchiveWriter
 from storage.audit import AuditWriter
-from notify.webhook import WebhookNotifier
-
 router = APIRouter()
 
 
@@ -726,6 +783,7 @@ class ApiKeyRecord(Base):
     upstream_key_id = Column(String(128), nullable=True)
     upstream_key_prefix = Column(String(16), nullable=True)
     upstream_key_encrypted = Column(Text, nullable=True)
+    safetyhub_key_encrypted = Column(Text, nullable=True)
     # ---- 阶段 5 K-Sync / K-Decoupled 模式标记（F15.1.5） ----
     # False: K-Sync（safetyhub_key 与 upstream_key 一致，默认）
     # True:  K-Decoupled（中转站 Key 已被替换或独立生成，与前哨站 Key 解耦）
@@ -938,78 +996,106 @@ class AuditReader:
     async def get_by_id(record_id: int) -> AuditLog | None:
         ...
 
-    @staticmethod
-    async def export(
-        start_time=None,
-        end_time=None,
-        format: str = "csv",
-    ) -> str | bytes:
-        ...
 ```
+
+当前 `AuditReader` 提供分页查询、详情和计数能力；审计 CSV/JSON 导出统一放入阶段 8 增强，不作为阶段 4~6 当前 API。
 
 ---
 
 ### 2.8 `admin/` — 管理后台
 
-管理员前端属于本项目交付物，放在 `admin/static/` 目录中，由 Nginx 直接托管静态文件，后端仅提供 `/admin/api/*` 管理接口。v1.0 前端至少包含仪表盘、拦截记录、消息归档、规则查看、系统设置；APIKey/模型权限、审批记录页面先放置入口与只读占位，后续版本启用编辑能力。
+管理员前端属于本项目交付物，放在 `admin/static/` 目录中，由 FastAPI 挂载静态文件；后端提供 `/admin/api/*` 管理接口。当前前端包含仪表盘、拦截记录、消息归档、上线观测、规则管理、系统设置、APIKey 管理和审批占位。APIKey 页面已在阶段 5/6 升级为可操作页面；模型/token/资源权限由中转站管理，SafetyHub 后台仅展示边界提示或 Provider 引用。
 
 #### 2.8.1 `admin/router.py` — API 路由
 
 ```python
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from admin.schemas import *
+from governance.api_keys import ApiKeyCreate, ApiKeyService
 from storage.archive import ArchiveReader
 from storage.audit import AuditReader
+from storage.admin_ops import AdminOperationReader, AdminOperationWriter
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_admin_access)])
 
 
-@router.get("/api/archives", response_model=ArchiveListResponse)
-async def list_archives(
-    user_id: str | None = None,
-    start_time: str | None = None,
-    end_time: str | None = None,
-    keyword: str | None = None,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-):
+@router.post("/login", response_model=AdminLoginResponse)
+async def login(payload: AdminLoginRequest, response: Response):
     ...
 
 
-@router.get("/api/archives/{record_id}", response_model=ArchiveDetailResponse)
-async def get_archive(record_id: int):
+@router.get("/observations/recent", response_model=ObservationListResponse)
+async def recent_observations(request: Request, limit: int = Query(default=10, ge=1, le=50)):
     ...
 
 
-@router.get("/api/audits", response_model=AuditListResponse)
-async def list_audits(
-    user_id: str | None = None,
-    rule_id: str | None = None,
-    rule_level: str | None = None,
-    start_time: str | None = None,
-    end_time: str | None = None,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-):
+@router.get("/archives", response_model=ArchiveListResponse)
+async def list_archives(request: Request, limit: int = Query(default=20, ge=1, le=100), offset: int = Query(default=0, ge=0)):
     ...
 
 
-@router.get("/api/audits/{record_id}", response_model=AuditDetailResponse)
-async def get_audit(record_id: int):
+@router.get("/archives/{archive_id}", response_model=ArchiveDetail)
+async def get_archive(request: Request, archive_id: int):
     ...
 
 
-@router.get("/api/audits/export")
-async def export_audits(
-    start_time: str | None = None,
-    end_time: str | None = None,
-    format: str = "csv",
-):
+@router.get("/audits", response_model=AuditListResponse)
+async def list_audits(request: Request, limit: int = Query(default=20, ge=1, le=100), offset: int = Query(default=0, ge=0)):
     ...
 
 
-@router.get("/api/stats", response_model=StatsResponse)
-async def get_stats():
+@router.get("/audits/{audit_id}", response_model=AuditDetail)
+async def get_audit(request: Request, audit_id: int):
+    ...
+
+
+@router.get("/admin-ops", response_model=AdminOperationListResponse)
+async def list_admin_operations(request: Request, limit: int = Query(default=20, ge=1, le=100), offset: int = Query(default=0, ge=0)):
+    ...
+
+
+@router.get("/stats", response_model=AdminStatsResponse)
+async def admin_stats(request: Request):
+    ...
+
+
+@router.get("/rules", response_model=RuleListResponse)
+async def list_rules(request: Request):
+    ...
+
+
+@router.post("/rules/reload", response_model=RulesReloadResponse)
+async def reload_rules(request: Request):
+    ...
+
+
+@router.get("/api-keys", response_model=ApiKeyListResponse)
+async def list_api_keys(request: Request, limit: int = Query(default=20, ge=1, le=100), offset: int = Query(default=0, ge=0)):
+    ...
+
+
+@router.post("/api-keys", response_model=ApiKeyMutationResponse)
+async def create_api_key(request: Request, payload: ApiKeyCreateRequest):
+    ...
+
+
+@router.post("/api-keys/{api_key_id}/reveal", response_model=ApiKeyRevealResponse)
+async def reveal_api_key(request: Request, response: Response, api_key_id: str):
+    ...
+
+
+@router.post("/api-keys/{api_key_id}/revoke", response_model=ApiKeyMutationResponse)
+async def revoke_api_key(request: Request, api_key_id: str):
+    ...
+
+
+@router.post("/api-keys/{api_key_id}/replace-upstream-key", response_model=ApiKeyMutationResponse)
+async def replace_upstream_key(request: Request, api_key_id: str, payload: ApiKeyReplaceRequest):
+    ...
+
+
+@router.post("/api-keys/bulk-replace-upstream-keys", response_model=ApiKeyBulkReplaceResponse)
+async def bulk_replace_upstream_keys(request: Request, payload: ApiKeyBulkReplaceRequest):
     ...
 ```
 
@@ -1085,85 +1171,15 @@ class StatsResponse(BaseModel):
 
 ### 2.9 `notify/` — 告警通知
 
-#### 2.9.1 `notify/webhook.py`
+当前 `notify/` 仅保留包初始化文件，告警通知尚未进入主链路。阶段 8 暂不开发，生产上线前不新增 `notify/webhook.py`、`notify/rate_limiter.py` 和对应测试，也不在 `proxy/relay.py` 中集成企微/飞书 Webhook 推送与频率控制。
 
-```python
-import httpx
-from engine.models import ScannerResult
-from notify.rate_limiter import AlertRateLimiter
+阶段 8 长期规划目标模块：
 
-
-class WebhookNotifier:
-    def __init__(self, webhook_url: str, webhook_type: str = "wecom"):
-        self._url = webhook_url
-        self._type = webhook_type
-        self._limiter = AlertRateLimiter()
-
-    async def notify(self, result: ScannerResult, user_id: str, request_id: str) -> None:
-        if not self._url:
-            return
-        if not self._limiter.should_send(result.rule_id, user_id):
-            return
-        payload = self._build_payload(result, user_id, request_id)
-        try:
-            async with httpx.AsyncClient() as client:
-                await client.post(self._url, json=payload, timeout=5)
-        except httpx.HTTPError:
-            pass
-
-    def _build_payload(self, result: ScannerResult, user_id: str, request_id: str) -> dict:
-        if self._type == "wecom":
-            return self._build_wecom_payload(result, user_id, request_id)
-        else:
-            return self._build_feishu_payload(result, user_id, request_id)
-
-    def _build_wecom_payload(self, result, user_id, request_id) -> dict:
-        ...
-
-    def _build_feishu_payload(self, result, user_id, request_id) -> dict:
-        ...
-```
-
-#### 2.9.2 `notify/rate_limiter.py`
-
-```python
-import time
-from collections import defaultdict
-
-
-class AlertRateLimiter:
-    def __init__(
-        self,
-        rule_silence_minutes: int = 5,
-        user_silence_minutes: int = 2,
-        hourly_limit: int = 50,
-    ):
-        self._rule_silence = rule_silence_minutes * 60
-        self._user_silence = user_silence_minutes * 60
-        self._hourly_limit = hourly_limit
-        self._rule_last_sent: dict[str, float] = {}
-        self._user_last_sent: dict[str, float] = {}
-        self._hourly_count = 0
-        self._hour_start = time.time()
-
-    def should_send(self, rule_id: str, user_id: str) -> bool:
-        now = time.time()
-        if now - self._hour_start > 3600:
-            self._hourly_count = 0
-            self._hour_start = now
-        if self._hourly_count >= self._hourly_limit:
-            return False
-        rule_key = rule_id
-        if rule_key in self._rule_last_sent and now - self._rule_last_sent[rule_key] < self._rule_silence:
-            return False
-        user_key = f"{rule_id}:{user_id}"
-        if user_key in self._user_last_sent and now - self._user_last_sent[user_key] < self._user_silence:
-            return False
-        self._rule_last_sent[rule_key] = now
-        self._user_last_sent[user_key] = now
-        self._hourly_count += 1
-        return True
-```
+| 模块 | 职责 |
+|------|------|
+| `notify/webhook.py` | 构造企微/飞书告警消息，发送 block/warn 高风险事件 |
+| `notify/rate_limiter.py` | 按规则、用户和小时维度做告警频控 |
+| `tests/test_webhook.py` | 验证告警 payload、频控和发送失败降级 |
 
 ---
 
@@ -1212,33 +1228,15 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
             return False
 ```
 
-#### 2.10.2 `middleware/logging.py`
+#### 2.10.2 `middleware/identity.py`
 
-```python
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-import logging
-import time
-
-logger = logging.getLogger("safetyhub")
-
-
-class RequestLoggingMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        start = time.time()
-        response = await call_next(request)
-        duration_ms = (time.time() - start) * 1000
-        logger.info(
-            "request_completed",
-            extra={
-                "method": request.method,
-                "path": request.url.path,
-                "status": response.status_code,
-                "duration_ms": round(duration_ms, 2),
-            },
-        )
-        return response
-```
+| 能力 | 当前行为 |
+|------|----------|
+| Authorization 解析 | 解析 `/v1/*` 请求的 Bearer Key，计算哈希后匹配 `api_keys` |
+| 过渡透传 | `api_keys` 表为空时保持阶段 1~4 透传行为 |
+| 有效性校验 | 创建第一条 APIKey 后校验 active/revoked/expired 状态 |
+| 上游 Key 映射 | 读取并解密 `upstream_key_encrypted`，写入请求上下文供 Header Policy 替换上游 Authorization |
+| 权限边界 | 不做模型/token/资源权限 allowlist，相关 401/403/429 由中转站判定并透传 |
 
 ---
 
@@ -1247,12 +1245,12 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 | 模块 | 职责 | v1.0 行为 | 后续启用方向 |
 |------|------|-----------|--------------|
 | `identity.py` | 解析用户、APIKey、来源 IP、客户端标识 | 统一生成 `RequestContext`，写入日志/归档/审计 | 接入企业 SSO、JWT claims、APIKey 归属映射 |
-| `api_keys.py` | APIKey 元数据、状态、所属用户/部门、上游 Key 映射 | 只存储哈希、前后缀和加密 upstream_key，不做资源授权 | 支持 APIKey 启停、吊销、过期、上游 Key 替换 |
-| `key_provider.py` | KeyProvider 抽象基类与工厂 | 仅定义接口，默认走 `passthrough` 占位 | 工厂根据 `key_provider_type` 实例化具体 Provider |
-| `providers/passthrough.py` | 默认占位实现 | 所有方法抛 `NotImplementedError` 或返回空 | 始终保留作为 fallback |
-| `providers/static_key.py` | 静态 Key 提供者 | 不实现 | 从配置读取中转站 Key，绑定时手动选择 |
-| `providers/oneapi.py` | OneAPI/OneHub 适配器 | 不实现 | 调用 `/api/token` 创建/吊销 |
-| `providers/openai_compat.py` | OpenAI 兼容协议适配器 | 不实现 | 调用 `/v1/api-keys` 接口 |
+| `api_keys.py` | APIKey 元数据、状态、所属用户/部门、上游 Key 映射 | 存储哈希、前后缀、加密 upstream_key、加密 safetyhub_key，不做资源授权 | 已支持 APIKey 启停、吊销、过期、上游 Key 替换、Provider 创建和 reveal |
+| `key_provider.py` | KeyProvider 抽象基类与工厂 | 已定义接口，按 `key_provider_type` 实例化 Provider | 新增 Provider 不改 relay/scanner/archive/audit 核心链路 |
+| `providers/passthrough.py` | 默认占位实现 | 所有写操作抛 `KeyProviderError` 或返回空 | 始终保留作为 fallback |
+| `providers/static_key.py` | 静态 Key 提供者 | 查询占位，不创建/吊销 | 从配置读取中转站 Key，绑定时手动选择 |
+| `providers/oneapi_nanfu_yxai.py` | 南孚 yxai OneAPI/OneHub 适配器 | 已实现登录、创建、取完整 Key、分页列表和吊销 | 调用 `/api/token`、`/api/token/{id}/key`、`DELETE /api/token/{id}` |
+| `providers/openai_compat.py` | OpenAI 兼容协议适配器 | 待实现 | 调用 `/v1/api-keys` 接口 |
 | `quota.py` | F20 中转站配额与速率观测 | 不实现 | 如 Provider 支持，阶段 10 只读查询或跳转中转站，不提供本地配额/速率拦截 |
 | `security_policy.py` | F18 Key 级安全策略 | 不实现 | 阶段 9 启用，提供 load/inheritance/apply_overrides |
 | `approval_chain.py` | F19 审批链路由 | 不实现 | 阶段 9 启用，提供 resolve_approver / on_approval_decision / on_timeout |
@@ -1262,7 +1260,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
 **预留原则**
 
-- APIKey 永不明文入库，只存哈希、前后缀展示、创建时间、状态、归属信息和加密后的 upstream_key
+- APIKey 永不明文入库，只存哈希、前后缀展示、创建时间、状态、归属信息、加密后的 upstream_key 和加密后的 safetyhub_key
 - 模型权限、token 额度、速率限制和资源能力权限由中转站作为权威系统管理，SafetyHub 不预留本地权限字段
 - SafetyHub 可在 `RequestContext`、归档和审计中记录 `api_key_id`、`model`、`capability`，用于安全治理、追溯和告警，不用于资源授权判定
 - 阶段 1~4 不实现复杂权限决策，阶段 5 只启用 APIKey 有效性校验和上游 Key 映射
@@ -1278,7 +1276,7 @@ from dataclasses import dataclass
 class UpstreamKeyInfo:
     key_id: str                       # 中转站侧的 Key ID
     key_prefix: str                   # 前后缀拼接，例如 "sk-ab...wxyz"
-    key_secret: str | None            # 完整 Key（仅 create 时返回，不持久化明文）
+    key_secret: str | None            # 完整上游 Key（Provider create 时返回；SafetyHub 加密后写入 upstream_key_encrypted / safetyhub_key_encrypted）
     metadata: dict
 
 
@@ -1328,9 +1326,9 @@ def create_key_provider(provider_type: str, **kwargs) -> KeyProvider:
     if provider_type == "static":
         from governance.providers.static_key import StaticKeyProvider
         return StaticKeyProvider(**kwargs)
-    if provider_type == "oneapi":
-        from governance.providers.oneapi import OneApiKeyProvider
-        return OneApiKeyProvider(**kwargs)
+    if provider_type == "oneapi_nanfu_yxai":
+        from governance.providers.oneapi_nanfu_yxai import OneApiNanfuYxaiKeyProvider
+        return OneApiNanfuYxaiKeyProvider(**kwargs)
     if provider_type == "openai_compat":
         from governance.providers.openai_compat import OpenAICompatProvider
         return OpenAICompatProvider(**kwargs)
@@ -1352,16 +1350,16 @@ def create_key_provider(provider_type: str, **kwargs) -> KeyProvider:
 #### 2.11.3 阶段 5/6 启用流程
 
 ```
-1. 实现 governance/key_provider.py 抽象基类
-2. 实现 governance/providers/{passthrough, static_key, oneapi, openai_compat}.py
-3. 在 main.py lifespan 中调用 create_key_provider，注入到 app.state.key_provider
-4. 实现 middleware/identity.py：
+1. ✅ 实现 governance/key_provider.py 抽象基类
+2. ✅ 实现 governance/providers/{passthrough, static_key, oneapi_nanfu_yxai}.py；openai_compat 待后续增强
+3. ✅ 在 main.py lifespan 中调用 create_key_provider，注入到 app.state.key_provider
+4. ✅ 实现 middleware/identity.py：
    ├─ 解析客户端 Authorization → 计算 key_hash
    ├─ 查询 api_keys 表 → 取出 upstream_key_encrypted → 解密
    └─ 写入 request.state.upstream_api_key
-5. 修改 proxy/relay.py：调用 build_upstream_headers 时传入 request.state.upstream_api_key
-6. 新增 admin/router.py 中的 /admin/api/api-keys CRUD 接口
-7. 新增 admin/static/api_keys.html 的编辑能力
+5. ✅ 修改 proxy/relay.py：调用 build_upstream_headers 时传入 request.state.upstream_api_key
+6. ✅ 新增 admin/router.py 中的 /admin/api/api-keys CRUD、reveal、吊销、单条/批量替换接口
+7. ✅ 新增 admin/static/api_keys.html 的编辑能力
 ```
 
 > **关键**：以上 7 步全部是新增或封装，**不修改 R1、R2、R3 引入的接口签名和数据 schema**，因此核心链路（scanner/relay/archive/audit）和前端通用页面无需任何改动。
@@ -1571,8 +1569,8 @@ services:
     restart: unless-stopped
     env_file: .env
     volumes:
-      - ./data:/app/data
-      - ./engine/rules_config.yaml:/app/engine/rules_config.yaml:ro
+      - ${SAFETYHUB_DATA_DIR:-./data}:/app/data
+      - ${SAFETYHUB_RULES_CONFIG:-./engine/rules_config.yaml}:/app/engine/rules_config.yaml
     ports:
       - "127.0.0.1:8000:8000"
     healthcheck:
@@ -1638,29 +1636,35 @@ services:
 ```
 main.py
   ├── config.py
+  ├── observability/health.py
+  ├── observability/request_id.py
+  ├── middleware/auth.py ──→ config.py
+  ├── middleware/identity.py ──→ governance/api_keys.py ──→ storage/models.py
+  ├── governance/key_provider.py ──→ governance/providers/{passthrough,static_key,oneapi_nanfu_yxai}.py
   ├── proxy/relay.py ────→ engine/scanner.py ────→ engine/rules_keyword.py
   │       │               │                   └─→ engine/rules_regex.py
   │       │               └─→ engine/models.py
   │       ├─→ proxy/fake_response.py ──→ engine/models.py
+  │       ├─→ proxy/header_policy.py
   │       ├─→ proxy/stream.py
+  │       ├─→ proxy/upstream_router.py
   │       ├─→ storage/archive.py ──→ storage/models.py ──→ storage/database.py
-  │       ├─→ storage/audit.py ────→ storage/models.py
-  │       └─→ notify/webhook.py ──→ notify/rate_limiter.py
+  │       └─→ storage/audit.py ────→ storage/models.py
   │
-  ├── admin/router.py ──→ admin/schemas.py
-  │       ├─→ storage/archive.py
-  │       └─→ storage/audit.py
-  │
-  ├── middleware/auth.py ──→ config.py
-  ├── middleware/logging.py
-  └── middleware/error_handler.py
+  └── admin/router.py ──→ admin/schemas.py
+          ├─→ governance/api_keys.py
+          ├─→ governance/key_provider.py
+          ├─→ storage/admin_ops.py
+          ├─→ storage/archive.py
+          └─→ storage/audit.py
 ```
 
 **依赖原则**
 
 - 上层模块依赖下层模块，禁止反向依赖
-- `proxy/` 可以依赖 `engine/`、`storage/`、`notify/`
-- `engine/` 不依赖 `proxy/`、`storage/`、`notify/`
-- `storage/` 不依赖 `engine/`、`proxy/`、`notify/`
-- `notify/` 只依赖 `engine/models.py`（数据模型）
-- `admin/` 只依赖 `storage/`
+- `proxy/` 可以依赖 `engine/`、`storage/`、`governance/` 透出的请求上下文，不直接依赖具体 Provider 实现
+- `engine/` 不依赖 `proxy/`、`storage/`、`governance/`
+- `storage/` 不依赖 `engine/`、`proxy/`、`governance/`
+- `governance/providers/` 只封装中转站 Key 管理，不影响 relay/scanner/archive/audit 核心链路
+- `notify/` 当前未接入主链路，阶段 8 启用后只依赖审计事件和脱敏后的扫描结果
+- `admin/` 可依赖 `storage/` 和 `governance/` 服务层，不直接访问中转站资源权限体系

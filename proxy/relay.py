@@ -1,3 +1,4 @@
+import asyncio
 from copy import deepcopy
 import json
 import re
@@ -18,6 +19,7 @@ from proxy.stream import SSEStreamProxy
 from proxy.upstream_router import UpstreamRouter, get_default_upstream_router
 from storage.archive import ArchivePayload, ArchiveWriter
 from storage.audit import AuditPayload, AuditWriter
+from storage.image_assets import ImageAssetArchiver, extract_image_asset_sources
 
 router = APIRouter()
 
@@ -218,12 +220,18 @@ def _response_archive_body(response: Response | StreamingResponse) -> Any:
 
 
 def _stream_archive_body(chunks: list[bytes]) -> dict[str, Any]:
-    raw_content = b"".join(chunks).decode("utf-8", errors="replace")
+    content_bytes = b"".join(chunks)
+    max_bytes = max(1, settings.stream_archive_max_bytes)
+    truncated = len(content_bytes) > max_bytes
+    raw_content = content_bytes[:max_bytes].decode("utf-8", errors="replace")
     return {
         "stream": True,
         "media_type": "text/event-stream",
         "content": raw_content,
         "message_content": _extract_sse_message_content(raw_content),
+        "truncated": truncated,
+        "archived_bytes": min(len(content_bytes), max_bytes),
+        "original_bytes": len(content_bytes),
     }
 
 
@@ -308,7 +316,9 @@ async def _write_image_archive(
     try:
         request_id = getattr(request.state, "request_id", "")
         writer = getattr(request.app.state, "archive_writer", None) or ArchiveWriter()
-        metadata = _build_image_metadata(original_body, response)
+        response_payload = _parse_response_json(response)
+        metadata = _build_image_metadata(original_body, response_payload)
+        await _schedule_image_asset_archive(request, request_id, response_payload)
         await writer.write(
             ArchivePayload(
                 request_id=request_id,
@@ -327,8 +337,7 @@ async def _write_image_archive(
         return
 
 
-def _build_image_metadata(request_body: dict[str, Any], response: Response) -> dict[str, Any]:
-    response_payload = _parse_response_json(response)
+def _build_image_metadata(request_body: dict[str, Any], response_payload: Any) -> dict[str, Any]:
     references = _extract_image_response_references(response_payload)
     return {
         "prompt": request_body.get("prompt", ""),
@@ -340,6 +349,9 @@ def _build_image_metadata(request_body: dict[str, Any], response: Response) -> d
         "response_urls": references["urls"],
         "response_b64_count": references["b64_count"],
         "response_b64_present": references["b64_count"] > 0,
+        "asset_count": len(references["assets"]),
+        "asset_sources": references["asset_sources"],
+        "asset_archive_status": "scheduled" if references["assets"] else "none",
     }
 
 
@@ -354,17 +366,38 @@ def _parse_response_json(response: Response) -> Any:
 def _extract_image_response_references(payload: Any) -> dict[str, Any]:
     urls: list[str] = []
     b64_count = 0
+    asset_sources: list[str] = []
+    assets = extract_image_asset_sources(payload)
     data = payload.get("data") if isinstance(payload, dict) else None
-    if not isinstance(data, list):
-        return {"urls": urls, "b64_count": b64_count}
-    for item in data:
-        if not isinstance(item, dict):
-            continue
-        if isinstance(item.get("url"), str):
-            urls.append(item["url"])
-        if isinstance(item.get("b64_json"), str) and item["b64_json"]:
-            b64_count += 1
-    return {"urls": urls, "b64_count": b64_count}
+    if isinstance(data, list):
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            if isinstance(item.get("url"), str):
+                urls.append(item["url"])
+            if isinstance(item.get("b64_json"), str) and item["b64_json"]:
+                b64_count += 1
+    for asset in assets:
+        asset_sources.append(asset.source_type)
+    return {"urls": urls, "b64_count": b64_count, "assets": assets, "asset_sources": asset_sources}
+
+
+async def _schedule_image_asset_archive(request: Request, request_id: str, response_payload: Any) -> None:
+    if not request_id or not extract_image_asset_sources(response_payload):
+        return
+    archiver = getattr(request.app.state, "image_asset_archiver", None)
+    if archiver is None:
+        archiver = ImageAssetArchiver()
+    if getattr(request.app.state, "image_asset_archive_inline", False):
+        await archiver.archive_response(request_id, response_payload)
+        return
+    task = asyncio.create_task(archiver.archive_response(request_id, response_payload))
+    tasks = getattr(request.app.state, "image_asset_archive_tasks", None)
+    if tasks is None:
+        tasks = set()
+        request.app.state.image_asset_archive_tasks = tasks
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
 
 
 async def _write_chat_audit(

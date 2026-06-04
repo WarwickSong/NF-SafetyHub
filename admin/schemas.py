@@ -51,6 +51,26 @@ class ArchiveStatsResponse(BaseModel):
     by_model: dict[str, int]
 
 
+class ImageAssetItem(BaseModel):
+    id: int
+    request_id: str
+    source_index: int
+    source_type: str
+    source_url: str
+    status: str
+    local_path: str
+    sha256: str
+    mime_type: str
+    size_bytes: int
+    error: str
+    created_at: datetime | None
+    completed_at: datetime | None
+
+
+class ImageAssetListResponse(BaseModel):
+    items: list[ImageAssetItem]
+
+
 class AuditSummary(BaseModel):
     id: int
     request_id: str
@@ -156,12 +176,14 @@ class AdminLoginResponse(BaseModel):
 class ApiKeyCreateRequest(BaseModel):
     name: str
     owner_user_id: str
-    upstream_key: str
+    upstream_key: str = ""
     reuse_upstream_key: bool = True
     expires_at: datetime | None = None
     provider_name: str = "passthrough"
     owner_department: str | None = None
     cost_center: str | None = None
+    create_mode: str = "manual"
+    metadata: dict[str, Any] | None = None
 
 
 class ApiKeyUpdateRequest(BaseModel):
@@ -203,6 +225,14 @@ class ApiKeyMutationResponse(BaseModel):
     status: str
     item: ApiKeyItem
     safetyhub_key: str | None = None
+
+
+class ApiKeyRevealResponse(BaseModel):
+    status: str
+    api_key_id: str
+    key: str
+    key_prefix: str
+    key_suffix: str
 
 
 class ApiKeyBulkReplaceItem(BaseModel):

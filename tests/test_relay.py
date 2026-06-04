@@ -1,3 +1,5 @@
+import base64
+
 import httpx
 import pytest
 from fastapi import FastAPI
@@ -489,11 +491,25 @@ def test_chat_completions_stream_archives_complete_sse_response(relay_test_app, 
     assert archive_payloads[0].is_stream is True
     assert archive_payloads[0].response["stream"] is True
     assert archive_payloads[0].response["message_content"] == "你好"
+    assert archive_payloads[0].response["truncated"] is False
     assert '"content":"你"' in archive_payloads[0].response["content"]
 
 
-def test_images_generation_archives_metadata_without_image_body(relay_test_app, monkeypatch):
+def test_stream_archive_body_truncates_large_sse_response(monkeypatch):
+    monkeypatch.setattr("proxy.relay.settings.stream_archive_max_bytes", 20)
+    from proxy import relay
+
+    payload = relay._stream_archive_body([b"data: ", b"x" * 50])
+
+    assert payload["truncated"] is True
+    assert payload["archived_bytes"] == 20
+    assert payload["original_bytes"] == 56
+    assert len(payload["content"].encode("utf-8")) == 20
+
+
+def test_images_generation_archives_metadata_and_schedules_image_body_archive(relay_test_app, monkeypatch):
     archive_payloads = []
+    b64_image = base64.b64encode(b"\x89PNG\r\n\x1a\nimage-bytes").decode("ascii")
 
     class FakeArchiveWriter:
         async def write(self, payload):
@@ -506,7 +522,7 @@ def test_images_generation_archives_metadata_without_image_body(relay_test_app, 
                 "created": 123,
                 "data": [
                     {"url": "https://cdn.example.com/image-1.png"},
-                    {"b64_json": "base64-image-content"},
+                    {"b64_json": b64_image},
                 ],
             },
         )
@@ -541,4 +557,7 @@ def test_images_generation_archives_metadata_without_image_body(relay_test_app, 
     assert metadata["response_urls"] == ["https://cdn.example.com/image-1.png"]
     assert metadata["response_b64_count"] == 1
     assert metadata["response_b64_present"] is True
-    assert "base64-image-content" not in metadata.values()
+    assert metadata["asset_count"] == 2
+    assert metadata["asset_sources"] == ["url", "b64_json"]
+    assert metadata["asset_archive_status"] == "scheduled"
+    assert b64_image not in metadata.values()

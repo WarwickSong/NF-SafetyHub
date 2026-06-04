@@ -60,6 +60,24 @@ class AuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class ImageAsset(Base):
+    __tablename__ = "image_assets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    request_id: Mapped[str] = mapped_column(String(64), index=True)
+    source_index: Mapped[int] = mapped_column(Integer, default=0)
+    source_type: Mapped[str] = mapped_column(String(32), index=True, default="")
+    source_url: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(32), index=True, default="pending")
+    local_path: Mapped[str] = mapped_column(Text, default="")
+    sha256: Mapped[str] = mapped_column(String(64), index=True, default="")
+    mime_type: Mapped[str] = mapped_column(String(64), default="")
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class ApiKeyRecord(Base):
     __tablename__ = "api_keys"
 
@@ -77,6 +95,7 @@ class ApiKeyRecord(Base):
     upstream_key_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     upstream_key_prefix: Mapped[str | None] = mapped_column(String(16), nullable=True)
     upstream_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    safetyhub_key_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_decoupled: Mapped[bool] = mapped_column(Boolean, index=True, default=False)
     security_policy_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     approval_chain_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)

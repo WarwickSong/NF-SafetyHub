@@ -93,12 +93,39 @@ docker compose up --build -d
 
 ## 六、数据与配置
 
-| 路径 | 说明 |
+| 路径/配置 | 说明 |
 |------|------|
-| `./data` | SQLite 数据库持久化目录 |
+| `SAFETYHUB_DATA_DIR` | 宿主机数据持久化目录，生产环境建议指向数据盘，例如 `/data/safetyhub/data` |
+| `/app/data` | 容器内数据目录，由 Compose 挂载到 `SAFETYHUB_DATA_DIR` |
+| `./data` | 未设置 `SAFETYHUB_DATA_DIR` 时的默认本地持久化目录 |
+| `DB_URL` | SQLite 数据库连接，默认 `sqlite+aiosqlite:///./data/safetyhub.db` |
+| `IMAGE_ASSET_DIR` | 图片资产目录，默认 `data/image_assets`，容器内对应 `/app/data/image_assets` |
+| `SAFETYHUB_RULES_CONFIG` | 宿主机规则配置文件，生产环境建议指向数据盘，例如 `/data/safetyhub/config/rules_config.yaml` |
+| `RULES_CONFIG_PATH` | 容器内规则配置路径，默认 `engine/rules_config.yaml` |
 | `./admin/static` | Nginx 挂载的管理后台静态文件 |
 | `./nginx/nginx.conf` | Nginx 配置 |
 | `./.env` | Compose 注入的环境变量 |
+
+生产服务器如果采用系统盘 + 数据盘，建议将数据盘挂载到固定路径，并在 `.env` 中设置：
+
+```bash
+SAFETYHUB_DATA_DIR=/data/safetyhub/data
+SAFETYHUB_RULES_CONFIG=/data/safetyhub/config/rules_config.yaml
+DB_URL=sqlite+aiosqlite:///./data/safetyhub.db
+RULES_CONFIG_PATH=engine/rules_config.yaml
+IMAGE_ASSET_DIR=data/image_assets
+```
+
+这样 SQLite 数据库和图片资产都会落在宿主机数据盘的 `/data/safetyhub/data` 下，规则配置文件会落在 `/data/safetyhub/config/rules_config.yaml`。容器重建、镜像升级或系统盘项目目录变更时，业务数据和后台修改过的规则都不会丢失。
+
+首次部署前建议把项目内默认规则复制到数据盘配置目录：
+
+```bash
+mkdir -p /data/safetyhub/config /data/safetyhub/data
+cp engine/rules_config.yaml /data/safetyhub/config/rules_config.yaml
+```
+
+`data/image_assets/{request_id}/` 不需要单独挂载；它是 `IMAGE_ASSET_DIR` 下按请求 ID 自动创建的子目录，已经包含在 `SAFETYHUB_DATA_DIR` 对应的数据盘挂载中。
 
 ---
 

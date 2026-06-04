@@ -72,6 +72,7 @@ def set_admin_session_cookie(response: Response, admin_user: str, active_setting
         create_admin_session_cookie(admin_user, active_settings),
         max_age=ADMIN_SESSION_MAX_AGE,
         httponly=True,
+        secure=active_settings.is_production,
         samesite="lax",
         path="/admin",
     )

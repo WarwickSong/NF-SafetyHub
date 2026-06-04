@@ -5,16 +5,49 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from admin.router import router as admin_router
-from config import Settings
+from config import Settings, validate_startup_settings
 from engine.rules_keyword import KeywordScanner
 from engine.rules_regex import RegexScanner
 from engine.scanner import ScannerOrchestrator
 from governance.api_keys import ApiKeyCreate, ApiKeyCrypto, ApiKeyService, hash_api_key, parse_bulk_replace_csv
+from governance.key_provider import KeyCreateParams, KeyProvider, KeyProviderError, UpstreamKeyInfo
 from middleware.identity import ApiKeyIdentityMiddleware
+from middleware.request_limit import RequestBodyLimitMiddleware
 from proxy.relay import router as relay_router
 from proxy.upstream_router import UpstreamRouter
 from storage.admin_ops import AdminOperationReader, AdminOperationWriter
 from storage.models import Base
+
+
+class FakeKeyProvider(KeyProvider):
+    def __init__(self, fail_revoke: bool = False):
+        self.created = []
+        self.revoked = []
+        self.fail_revoke = fail_revoke
+
+    @property
+    def provider_name(self) -> str:
+        return "oneapi_nanfu_yxai"
+
+    @property
+    def upstream_base_url(self) -> str:
+        return "https://yxai-api.nanfu.com"
+
+    async def create_key(self, params: KeyCreateParams) -> UpstreamKeyInfo:
+        self.created.append(params)
+        return UpstreamKeyInfo(key_id="63", key_prefix="sk-provider", key_suffix="cret-1", key_secret="sk-provider-secret-1")
+
+    async def revoke_key(self, key_id: str) -> bool:
+        if self.fail_revoke:
+            raise KeyProviderError("revoke failed")
+        self.revoked.append(key_id)
+        return True
+
+    async def get_key_info(self, key_id: str) -> UpstreamKeyInfo | None:
+        return None
+
+    async def list_keys(self) -> list[UpstreamKeyInfo]:
+        return []
 
 
 @pytest.mark.asyncio
@@ -35,8 +68,10 @@ async def test_api_key_service_creates_ksync_record_and_replaces_upstream_key():
 
     assert record.key_hash == hash_api_key("sk-upstream-original")
     assert record.upstream_key_encrypted != "sk-upstream-original"
+    assert record.safetyhub_key_encrypted != "sk-upstream-original"
     assert record.is_decoupled is False
     assert await service.decrypt_upstream_key(record) == "sk-upstream-original"
+    assert await service.decrypt_safetyhub_key(record) == "sk-upstream-original"
 
     with pytest.raises(ValueError, match="safetyhub api key already exists"):
         await service.create_ksync(
@@ -81,6 +116,7 @@ async def test_api_key_service_creates_decoupled_record_with_unique_safetyhub_ke
     assert result.record.upstream_key_prefix == "sk-upstream-"
     assert result.record.is_decoupled is True
     assert await service.decrypt_upstream_key(result.record) == "sk-upstream-original"
+    assert await service.decrypt_safetyhub_key(result.record) == result.safetyhub_key
 
     await engine.dispose()
 
@@ -92,6 +128,54 @@ def test_parse_bulk_replace_csv_supports_id_and_prefix_columns():
     assert rows[0].identifier == "ak_1"
     assert rows[0].new_upstream_key == "sk-new-1"
     assert prefix_rows[0].identifier == "sk-old"
+
+
+@pytest.mark.asyncio
+async def test_provider_create_reveal_and_revoke():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    provider = FakeKeyProvider()
+    service = ApiKeyService(session_factory, ApiKeyCrypto("test-data-key"), provider)
+
+    result = await service.create(
+        ApiKeyCreate(
+            name="Provider Key",
+            owner_user_id="user_provider",
+            create_mode="provider",
+        )
+    )
+
+    assert result.safetyhub_key == "sk-provider-secret-1"
+    assert result.record.provider_name == "oneapi_nanfu_yxai"
+    assert result.record.upstream_key_id == "63"
+    assert result.record.is_decoupled is False
+    assert await service.reveal_safetyhub_key(result.record.id) == "sk-provider-secret-1"
+    revoked = await service.revoke(result.record.id)
+    assert revoked.status == "revoked"
+    assert provider.revoked == ["63"]
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_provider_revoke_failure_does_not_mark_local_record_revoked():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    provider = FakeKeyProvider(fail_revoke=True)
+    service = ApiKeyService(session_factory, ApiKeyCrypto("test-data-key"), provider)
+    result = await service.create(ApiKeyCreate(name="Provider Key", owner_user_id="user_provider", create_mode="provider"))
+
+    with pytest.raises(KeyProviderError, match="revoke failed"):
+        await service.revoke(result.record.id)
+
+    record = await service.get(result.record.id)
+    assert record.status == "active"
+
+    await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -148,6 +232,7 @@ async def test_admin_api_key_crud_and_admin_operation_logging():
             auth=auth,
             json={"new_upstream_key": "sk-upstream-new"},
         )
+        reveal_response = client.post(f"/admin/api/api-keys/{api_key_id}/reveal", auth=auth)
         revoke_response = client.post(f"/admin/api/api-keys/{api_key_id}/revoke", auth=auth)
         operations_response = client.get("/admin/api/admin-ops?resource_type=api_key", auth=auth)
 
@@ -163,11 +248,15 @@ async def test_admin_api_key_crud_and_admin_operation_logging():
     assert "model_allowlist" not in create_response.json()["item"]
     assert list_response.json()["pagination"]["total"] == 2
     assert replace_response.json()["item"]["is_decoupled"] is True
+    assert reveal_response.status_code == 200
+    assert reveal_response.json()["key"] == "sk-upstream-original"
+    assert reveal_response.headers["cache-control"] == "no-store"
     assert revoke_response.json()["item"]["status"] == "revoked"
     assert {item["operation"] for item in operations_response.json()["items"]} >= {
         "api_key.create",
         "api_key.view_detail",
         "api_key.replace_upstream_key",
+        "api_key.reveal",
         "api_key.revoke",
     }
 
@@ -237,3 +326,91 @@ async def test_relay_uses_managed_upstream_key_without_enforcing_resource_allowl
     assert captured["https://upstream.example.com/v1/embeddings"] == "Bearer sk-upstream-new"
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_api_key_middleware_returns_401_instead_of_500_when_key_missing(monkeypatch):
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    service = ApiKeyService(session_factory=session_factory, crypto=ApiKeyCrypto("test-data-key"))
+    await service.create(ApiKeyCreate(name="client", owner_user_id="user-1", upstream_key="sk-upstream"))
+    monkeypatch.setattr("middleware.identity.settings.allow_empty_api_keys_passthrough", False)
+
+    app = FastAPI()
+    app.state.api_key_service = service
+    app.state.session_factory = session_factory
+
+    @app.get("/v1/test")
+    async def protected_endpoint():
+        return {"ok": True}
+
+    app.add_middleware(ApiKeyIdentityMiddleware, api_key_count_cache_seconds=0)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/v1/test")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "missing api key"
+
+    await engine.dispose()
+
+
+def test_production_startup_validation_requires_data_key_and_disables_empty_key_passthrough(monkeypatch):
+    monkeypatch.delenv("SAFETYHUB_DATA_KEY", raising=False)
+    production_settings = Settings(
+        environment="production",
+        upstream_url="https://upstream.example.com",
+        admin_password="strong-local-password",
+        allow_empty_api_keys_passthrough=True,
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        validate_startup_settings(production_settings)
+
+    message = str(exc_info.value)
+    assert "SAFETYHUB_DATA_KEY" in message
+    assert "ALLOW_EMPTY_API_KEYS_PASSTHROUGH=false" in message
+
+
+@pytest.mark.asyncio
+async def test_api_key_middleware_rejects_empty_table_when_passthrough_disabled(monkeypatch):
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    service = ApiKeyService(session_factory=session_factory, crypto=ApiKeyCrypto("test-data-key"))
+    monkeypatch.setattr("middleware.identity.settings.allow_empty_api_keys_passthrough", False)
+
+    app = FastAPI()
+    app.state.api_key_service = service
+    app.add_middleware(ApiKeyIdentityMiddleware, api_key_count_cache_seconds=0)
+
+    @app.get("/v1/test")
+    async def protected_endpoint():
+        return {"ok": True}
+
+    with TestClient(app) as client:
+        response = client.get("/v1/test", headers={"Authorization": "Bearer sk-client"})
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "api key is required"
+
+    await engine.dispose()
+
+
+def test_request_body_limit_middleware_rejects_large_content_length(monkeypatch):
+    monkeypatch.setattr("middleware.request_limit.settings.request_max_body_mb", 1)
+    app = FastAPI()
+
+    @app.post("/v1/test")
+    async def limited_endpoint():
+        return {"ok": True}
+
+    app.add_middleware(RequestBodyLimitMiddleware)
+
+    with TestClient(app) as client:
+        response = client.post("/v1/test", headers={"Content-Length": str(1024 * 1024 + 1)}, content=b"{}")
+
+    assert response.status_code == 413

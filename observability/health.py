@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from config import settings
@@ -15,13 +16,16 @@ async def live() -> dict[str, str]:
 
 
 @router.get("/ready")
-async def ready() -> dict[str, object]:
+async def ready() -> JSONResponse:
     checks = {
         "database": await _check_database(),
         "rules": _check_rules_file(),
     }
-    status = "ready" if all(checks.values()) else "not_ready"
-    return {"status": status, "checks": checks}
+    is_ready = all(checks.values())
+    return JSONResponse(
+        status_code=200 if is_ready else 503,
+        content={"status": "ready" if is_ready else "not_ready", "checks": checks},
+    )
 
 
 async def _check_database() -> bool:

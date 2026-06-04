@@ -20,7 +20,7 @@
   </nav>
   <main class="content">
     <header class="topbar">
-      <div><h1>APIKey 管理</h1><p>阶段 5：K-Sync 默认、加密存储、APIKey 有效性校验、单条与批量替换上游 Key；模型/token/资源权限由中转站管理。</p></div>
+      <div><h1>APIKey 管理</h1><p>阶段 6：支持手动录入和 KeyProvider 联通中转站创建；模型/token/资源权限由中转站管理。</p></div>
       <button class="button" data-refresh>刷新</button>
     </header>
     <section class="card">
@@ -28,9 +28,10 @@
       <div class="form-grid api-key-form">
         <input id="apiKeyName" placeholder="中转站 APIKey 名称">
         <input id="apiKeyOwner" placeholder="所属用户">
+        <select id="apiKeyCreateMode"><option value="manual">手动录入中转站 Key</option><option value="provider">由 KeyProvider 创建</option></select>
         <input id="apiKeyValue" type="password" placeholder="中转站 Key">
         <label class="checkbox-field"><input id="reuseUpstreamKey" type="checkbox" checked> SafetyHub Key 与中转站 Key 一致</label>
-        <div id="safetyhubGenerateHint" class="form-hint">取消勾选后，SafetyHub 会自动生成一个当前系统不存在的 Key，并仅在创建成功后展示一次。</div>
+        <div id="safetyhubGenerateHint" class="form-hint">Provider 创建会在创建成功后展示完整 Key；取消勾选后，SafetyHub 会自动生成独立客户端 Key。</div>
         <button class="button" id="createApiKey">创建</button>
       </div>
       <p class="inline-message" id="apiKeyMessage"></p>

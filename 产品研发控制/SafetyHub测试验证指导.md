@@ -1,7 +1,7 @@
 # LLM-SafetyHub 测试验证指导
 
 > 本文档定义 SafetyHub 在 Windows、Linux、Docker 和真实上游联调场景下的测试方法、注意事项和验收标准。  
-> 当前重点覆盖阶段 1 透传中继 + 健康检查、阶段 2 检测/拦截/请求侧手机号脱敏/伪装回复/规则启停/规则热加载链路、阶段 3 Chat 非流式/流式归档、文生图元数据归档、审计写入、最近对话观测 API、R1~R9 schema 预留、阶段 4 管理后台，以及阶段 5 APIKey 管理、K-Sync 默认、加密存储、APIKey 有效性校验、单条/CSV 批量替换上游 Key。模型权限、token 额度和资源能力权限由中转站验证。后续 KeyProvider、审计告警和图片本体归档完成后应继续扩展本文档。
+> 当前重点覆盖阶段 1 透传中继 + 健康检查、阶段 2 检测/拦截/请求侧手机号脱敏/伪装回复/规则启停/规则热加载链路、阶段 3 Chat 非流式/流式归档、文生图元数据归档、图片本体异步归档、图片资产状态 API、审计写入、最近对话观测 API、R1~R9 schema 预留、阶段 4 管理后台、阶段 5 APIKey 管理、K-Sync 默认、加密存储、APIKey 有效性校验、单条/CSV 批量替换上游 Key，以及阶段 6 KeyProvider 抽象、`passthrough` / `static` / `oneapi_nanfu_yxai` Provider、Provider 创建、reveal/复制、Provider-aware 吊销和历史 Key JSON 导入。模型权限、token 额度和资源能力权限由中转站验证。阶段 7 及之后暂不开发；当前测试重点收敛到阶段 6 及之前的生产上线验证，自动续约迁移、Provider 切换演练、审计告警、图片资产预览下载页面和存储治理仅保留为长期规划。
 
 ---
 
@@ -55,7 +55,7 @@ cd <SafetyHub项目根目录>
 当前基线：
 
 ```text
-66 passed
+69 passed
 ```
 
 当前已知提示：`datetime.utcnow()` 弃用警告已修复，ORM 时间字段统一使用 timezone-aware UTC。
@@ -241,7 +241,7 @@ Invoke-WebRequest -Uri http://127.0.0.1:8000/v1/chat/completions -Method Post -C
 
 - Chat 非流式正常请求、脱敏请求、拦截请求可写入归档。
 - Chat 流式请求可归档完整 SSE 响应内容，并提取 `message_content`。
-- 文生图请求可写入 prompt、model、size、style、n、响应 URL 和 b64 存在状态，且不下载、不解码、不保存图片本体。
+- 文生图请求可写入 prompt、model、size、style、n、响应 URL 和 b64 存在状态，并异步归档 b64_json / URL 图片本体、sha256、mime_type、size_bytes 和下载/解码状态。
 - 归档中可区分 `prompt_original` 与 `prompt_desensitized`。
 - 命中事件可写入 `audit_logs`，并记录规则 ID、级别、命中片段和全文 hash。
 - `/admin/api/observations/recent` 可返回最近少量完整 Chat 样本，包含 role、原始/脱敏 messages、响应和命中动作。
@@ -250,9 +250,9 @@ Invoke-WebRequest -Uri http://127.0.0.1:8000/v1/chat/completions -Method Post -C
 - `/admin/api/*` 默认受 Basic Auth + IP 白名单保护。
 - 归档/审计异常不影响 relay 主链路。
 
-当前边界：阶段 3 不保存文生图图片本体；图片本体异步归档、预览、下载、存储配额和保留策略放入阶段 8。
+当前边界：阶段 3 已保存文生图图片本体和状态记录；图片资产后台预览/下载页面、存储配额和保留策略放入阶段 8。
 
-### 6.5 阶段 5 APIKey 管理验证
+### 6.5 阶段 5/6 APIKey 与 KeyProvider 验证
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests\test_api_keys.py
@@ -260,15 +260,27 @@ Invoke-WebRequest -Uri http://127.0.0.1:8000/v1/chat/completions -Method Post -C
 
 预期：
 
-- `governance/api_keys.py` 可创建 K-Sync APIKey，`key_hash` 与 `upstream_key_encrypted` 均不保存明文。
-- 管理后台 `/admin/api/api-keys` 可创建、列表、详情、吊销 APIKey。
-- 单条替换上游 Key 后 `is_decoupled=True`，客户端 SafetyHub Key 不变。
+- `governance/api_keys.py` 可创建 K-Sync APIKey，`key_hash`、`upstream_key_encrypted`、`safetyhub_key_encrypted` 均不保存明文。
+- 管理后台 `/admin/api/api-keys` 可手动创建、Provider 创建、列表、详情、reveal、吊销 APIKey。
+- `governance/key_provider.py` 抽象和 `oneapi_nanfu_yxai` Provider 支持创建、获取完整 Key、分页列表和吊销中转站 Key。
+- Provider 创建默认 K-Sync，创建成功返回完整 SafetyHub Key；列表默认只展示前后缀。
+- reveal 接口按需返回完整 SafetyHub Key，设置 `Cache-Control: no-store`，并写入管理员操作审计。
+- Provider-aware 吊销必须先删除中转站 Key，成功后才标记本地 revoked；删除失败不得假成功。
+- 单条替换上游 Key 后 `is_decoupled=True`，客户端 SafetyHub Key 不变，且不覆盖 Provider 创建记录的真实 `upstream_key_id`。
 - CSV 批量替换支持 `api_key_id,new_upstream_key` 或 `safetyhub_key_prefix,new_upstream_key`。
 - `/v1/*` 启用 APIKey 后会用解密后的上游 Key 替换转发 Authorization。
 - APIKey 表、后台表单和 API 响应均不包含 `model_allowlist` 或 `capability_allowlist`；模型权限、token 额度和资源能力权限由中转站返回最终结果。
-- APIKey 创建、查看、吊销、替换操作写入管理员操作审计。
+- APIKey 创建、查看、reveal、吊销、替换操作写入管理员操作审计。
 
-阶段 5 过渡边界：如果 `api_keys` 表为空，`/v1/*` 暂保持阶段 1-4 的历史透传行为；创建第一条 APIKey 后开始执行 APIKey 有效性校验和上游 Key 映射，不接管中转站资源权限。
+阶段 5/6 过渡边界：如果 `api_keys` 表为空，`/v1/*` 暂保持阶段 1-4 的历史透传行为；创建或导入第一条 APIKey 后开始执行 APIKey 有效性校验和上游 Key 映射，不接管中转站资源权限。
+
+历史 yxai Key 导入验证：
+
+```powershell
+python scripts\import_yxai_keys.py
+```
+
+预期：脚本可从 `d:\Code\public\中转站\LLM-relay\yxai_token_export.json` 幂等导入，重复执行不会新增重复记录，只更新已有 `oneapi_nanfu_yxai` 记录。
 
 ### 6.6 编码验证
 
@@ -512,7 +524,9 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 ### 阶段 3 当前已完成能力
 
 - [x] Chat 消息归档写入测试。
-- [x] 文生图元数据归档测试，确认不下载、不解码、不保存图片本体。
+- [x] 文生图元数据归档测试，确认元数据、响应引用、资产数量和异步调度状态。
+- [x] 文生图图片本体异步归档测试，覆盖 b64_json 解码保存、URL 下载状态记录和失败降级。
+- [x] 图片资产状态 API 鉴权测试。
 - [x] 归档失败降级测试。
 - [x] Chat 流式响应归档测试。
 - [x] 基础审计事件测试。
@@ -532,10 +546,11 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 - [x] APIKey 管理员操作审计测试。
 - [x] Key 明文不在后台 API 响应中返回测试。
 
-### 阶段 8 后续必须补充
+### 阶段 8 长期规划测试
 
-- [ ] 文生图图片本体异步归档测试，覆盖 b64_json 解码保存和 URL 下载状态记录。
-- [ ] 图片资产后台预览/下载鉴权测试。
+阶段 8 暂不开发，以下测试仅作为长期规划保留，不纳入本次生产上线阻塞项。
+
+- [ ] 图片资产后台预览/下载页面测试，覆盖鉴权、操作审计和未授权拒绝。
 - [ ] 图片资产存储配额、保留天数和清理任务测试。
 
 ---

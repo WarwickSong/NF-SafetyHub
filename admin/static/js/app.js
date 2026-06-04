@@ -144,14 +144,18 @@ async function loadApiKeys() {
   document.getElementById("createApiKey")?.addEventListener("click", createApiKey, { once: true });
   const reuseUpstreamKey = document.getElementById("reuseUpstreamKey");
   if (reuseUpstreamKey) reuseUpstreamKey.onchange = toggleSafetyHubKeyInput;
+  const createMode = document.getElementById("apiKeyCreateMode");
+  if (createMode) createMode.onchange = toggleSafetyHubKeyInput;
   document.getElementById("bulkReplaceApiKeys")?.addEventListener("click", bulkReplaceApiKeys, { once: true });
   toggleSafetyHubKeyInput();
   const payload = await SafetyHub.api("/admin/api/api-keys");
   const table = document.getElementById("apiKeysTable");
-  table.innerHTML = payload.items.map((item) => `<tr data-id="${item.id}"><td>${SafetyHub.text(item.name)}</td><td>${SafetyHub.text(item.owner_user_id)}</td><td>${item.key_prefix}******${item.key_suffix}</td><td><span class="tag">${item.is_decoupled ? "K-Decoupled" : "K-Sync"}</span></td><td>${SafetyHub.text(item.upstream_key_prefix)}</td><td>由中转站管理</td><td>${item.status}</td><td>${SafetyHub.time(item.created_at)}</td><td><button class="button small secondary" data-action="replace">替换上游</button> <button class="button small secondary" data-action="revoke">吊销</button></td></tr>`).join("");
+  table.innerHTML = payload.items.map((item) => `<tr data-id="${item.id}" data-masked="${item.key_prefix}******${item.key_suffix}"><td>${SafetyHub.text(item.name)}</td><td>${SafetyHub.text(item.owner_user_id)}</td><td><span data-key-display>${item.key_prefix}******${item.key_suffix}</span> <button class="button small secondary" data-action="copy">复制</button> <button class="button small secondary" data-action="reveal">显示</button></td><td><span class="tag">${item.is_decoupled ? "K-Decoupled" : "K-Sync"}</span></td><td>${SafetyHub.text(item.upstream_key_prefix)}</td><td>由中转站管理</td><td>${item.status}</td><td>${SafetyHub.time(item.created_at)}</td><td><button class="button small secondary" data-action="replace">替换上游</button> <button class="button small secondary" data-action="revoke">吊销</button></td></tr>`).join("");
   table.querySelectorAll("button[data-action]").forEach((button) => button.addEventListener("click", async (event) => {
     event.stopPropagation();
     const row = button.closest("tr");
+    if (button.dataset.action === "copy") await copyApiKey(row.dataset.id);
+    if (button.dataset.action === "reveal") await revealApiKey(row, button);
     if (button.dataset.action === "replace") await replaceApiKey(row.dataset.id);
     if (button.dataset.action === "revoke") await revokeApiKey(row.dataset.id);
   }));
@@ -160,26 +164,55 @@ async function loadApiKeys() {
 async function createApiKey() {
   setApiKeyMessage("创建中...");
   const reuseUpstreamKey = document.getElementById("reuseUpstreamKey")?.checked !== false;
+  const createMode = document.getElementById("apiKeyCreateMode")?.value || "manual";
   const payload = await SafetyHub.api("/admin/api/api-keys", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       name: inputValue("apiKeyName"),
       owner_user_id: inputValue("apiKeyOwner"),
-      upstream_key: inputValue("apiKeyValue"),
-      reuse_upstream_key: reuseUpstreamKey
+      upstream_key: createMode === "manual" ? inputValue("apiKeyValue") : "",
+      reuse_upstream_key: reuseUpstreamKey,
+      create_mode: createMode
     })
   });
   document.getElementById("apiKeyValue").value = "";
-  setApiKeyMessage(reuseUpstreamKey ? "APIKey 已创建，列表仅展示前后缀。客户端可继续使用该中转站 Key 访问 SafetyHub。" : `APIKey 已创建，SafetyHub Key 仅展示一次：${payload.safetyhub_key}`);
+  setApiKeyMessage(payload.safetyhub_key ? `APIKey 已创建，请复制保存：${payload.safetyhub_key}` : "APIKey 已创建，列表仅展示前后缀，可按需点击显示或复制完整 Key。");
   await loadApiKeys();
 }
 
 function toggleSafetyHubKeyInput() {
   const reuseUpstreamKey = document.getElementById("reuseUpstreamKey")?.checked !== false;
+  const createMode = document.getElementById("apiKeyCreateMode")?.value || "manual";
+  const keyInput = document.getElementById("apiKeyValue");
   const hint = document.getElementById("safetyhubGenerateHint");
-  if (!hint) return;
-  hint.classList.toggle("active", !reuseUpstreamKey);
+  if (keyInput) keyInput.disabled = createMode === "provider";
+  if (hint) hint.classList.toggle("active", !reuseUpstreamKey || createMode === "provider");
+}
+
+async function revealSecret(apiKeyId) {
+  return SafetyHub.api(`/admin/api/api-keys/${encodeURIComponent(apiKeyId)}/reveal`, { method: "POST" });
+}
+
+async function copyApiKey(apiKeyId) {
+  const payload = await revealSecret(apiKeyId);
+  await navigator.clipboard.writeText(payload.key);
+  setApiKeyMessage("完整 Key 已复制，本次操作已记录审计。");
+}
+
+async function revealApiKey(row, button) {
+  const display = row.querySelector("[data-key-display]");
+  if (button.dataset.visible === "true") {
+    display.textContent = row.dataset.masked;
+    button.dataset.visible = "false";
+    button.textContent = "显示";
+    return;
+  }
+  const payload = await revealSecret(row.dataset.id);
+  display.textContent = payload.key;
+  button.dataset.visible = "true";
+  button.textContent = "隐藏";
+  setApiKeyMessage("完整 Key 已显示，本次操作已记录审计。");
 }
 
 async function replaceApiKey(apiKeyId) {
