@@ -69,6 +69,8 @@ async def test_api_key_service_creates_ksync_record_and_replaces_upstream_key():
     assert record.key_hash == hash_api_key("sk-upstream-original")
     assert record.upstream_key_encrypted != "sk-upstream-original"
     assert record.safetyhub_key_encrypted != "sk-upstream-original"
+    assert record.upstream_key_encrypted.startswith("v2:")
+    assert record.safetyhub_key_encrypted.startswith("v2:")
     assert record.is_decoupled is False
     assert await service.decrypt_upstream_key(record) == "sk-upstream-original"
     assert await service.decrypt_safetyhub_key(record) == "sk-upstream-original"
@@ -119,6 +121,13 @@ async def test_api_key_service_creates_decoupled_record_with_unique_safetyhub_ke
     assert await service.decrypt_safetyhub_key(result.record) == result.safetyhub_key
 
     await engine.dispose()
+
+
+def test_api_key_crypto_rejects_non_fernet_values():
+    crypto = ApiKeyCrypto("test-data-key")
+
+    with pytest.raises(ValueError, match="unsupported encrypted value version"):
+        crypto.decrypt("v1:legacy-value")
 
 
 def test_parse_bulk_replace_csv_supports_id_and_prefix_columns():

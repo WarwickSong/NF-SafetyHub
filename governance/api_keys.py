@@ -6,13 +6,13 @@ from datetime import datetime
 import base64
 import csv
 import hashlib
-import hmac
 import io
 import os
 import secrets
 import uuid
 from typing import Any
 
+from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -76,39 +76,20 @@ class BulkReplaceResult:
 class ApiKeyCrypto:
     def __init__(self, data_key: str | None = None):
         self._data_key = data_key or os.getenv(settings.data_encryption_key_env) or _development_data_key()
+        self._fernet = Fernet(_fernet_key(self._data_key))
 
     def encrypt(self, value: str) -> str:
-        salt = secrets.token_bytes(16)
-        nonce = secrets.token_bytes(16)
-        enc_key, mac_key = self._derive_keys(salt)
-        plaintext = value.encode("utf-8")
-        ciphertext = _xor_bytes(plaintext, _keystream(enc_key, nonce, len(plaintext)))
-        header = b"v1" + salt + nonce + ciphertext
-        tag = hmac.new(mac_key, header, hashlib.sha256).digest()
-        return ":".join(["v1", _b64(salt), _b64(nonce), _b64(ciphertext), _b64(tag)])
+        token = self._fernet.encrypt(value.encode("utf-8")).decode("ascii")
+        return f"v2:{token}"
 
     def decrypt(self, value: str) -> str:
+        if not value.startswith("v2:"):
+            raise ValueError("unsupported encrypted value version")
+        token = value.removeprefix("v2:").encode("ascii")
         try:
-            version, salt_value, nonce_value, ciphertext_value, tag_value = value.split(":", 4)
-            if version != "v1":
-                raise ValueError("unsupported envelope")
-            salt = _unb64(salt_value)
-            nonce = _unb64(nonce_value)
-            ciphertext = _unb64(ciphertext_value)
-            expected_tag = _unb64(tag_value)
-        except Exception as exc:
+            return self._fernet.decrypt(token).decode("utf-8")
+        except (InvalidToken, UnicodeDecodeError) as exc:
             raise ValueError("invalid encrypted value") from exc
-        enc_key, mac_key = self._derive_keys(salt)
-        header = b"v1" + salt + nonce + ciphertext
-        actual_tag = hmac.new(mac_key, header, hashlib.sha256).digest()
-        if not hmac.compare_digest(actual_tag, expected_tag):
-            raise ValueError("encrypted value integrity check failed")
-        plaintext = _xor_bytes(ciphertext, _keystream(enc_key, nonce, len(ciphertext)))
-        return plaintext.decode("utf-8")
-
-    def _derive_keys(self, salt: bytes) -> tuple[bytes, bytes]:
-        root = hashlib.pbkdf2_hmac("sha256", self._data_key.encode("utf-8"), salt, 200_000, dklen=64)
-        return root[:32], root[32:]
 
 
 class ApiKeyService:
@@ -420,22 +401,7 @@ def _development_data_key() -> str:
     return f"development:{seed}"
 
 
-def _b64(value: bytes) -> str:
-    return base64.urlsafe_b64encode(value).decode("ascii")
+def _fernet_key(data_key: str) -> bytes:
+    digest = hashlib.sha256(data_key.encode("utf-8")).digest()
+    return base64.urlsafe_b64encode(digest)
 
-
-def _unb64(value: str) -> bytes:
-    return base64.urlsafe_b64decode(value.encode("ascii"))
-
-
-def _keystream(key: bytes, nonce: bytes, length: int) -> bytes:
-    output = bytearray()
-    counter = 0
-    while len(output) < length:
-        output.extend(hmac.new(key, nonce + counter.to_bytes(8, "big"), hashlib.sha256).digest())
-        counter += 1
-    return bytes(output[:length])
-
-
-def _xor_bytes(left: bytes, right: bytes) -> bytes:
-    return bytes(a ^ b for a, b in zip(left, right, strict=False))
