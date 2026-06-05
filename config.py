@@ -16,11 +16,11 @@ class Settings(BaseSettings):
     upstream_timeout_read: int = 120
     upstream_timeout_pool: int = 5
     upstream_max_connections: int = 200
-    upstream_max_keepalive_connections: int = 100
+    upstream_max_keepalive_connections: int = 150
     upstream_keepalive_expiry: int = 30
 
-    v1_max_inflight: int = 250
-    v1_max_queue_size: int = 500
+    v1_max_inflight: int = 150
+    v1_max_queue_size: int = 200
     v1_queue_timeout_seconds: float = 15
     admin_stats_cache_seconds: int = 10
     archive_queue_max_size: int = 5000

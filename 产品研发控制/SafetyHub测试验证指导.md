@@ -55,7 +55,7 @@ cd <SafetyHub项目根目录>
 当前基线：
 
 ```text
-69 passed
+94 passed
 ```
 
 当前已知提示：`datetime.utcnow()` 弃用警告已修复，ORM 时间字段统一使用 timezone-aware UTC。
@@ -660,7 +660,7 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 
 - [x] APIKey K-Sync 创建测试。
 - [x] APIKey 哈希与加密存储测试。
-- [x] 后台 APIKey 创建、列表、详情、吊销测试。
+- [x] 后台 APIKey 创建、列表、详情、更新、吊销和删除已吊销 Key 测试。
 - [x] 单条替换上游 Key 测试。
 - [x] CSV 批量替换解析与执行测试。
 - [x] `/v1/*` 上游 Key 替换转发测试。
@@ -672,9 +672,9 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 
 - [x] APIKey SQLite 到 PostgreSQL 迁移验证，`api_keys: sqlite=23 postgres=23 OK`。
 - [x] Linux 开发运行脚本连接 PostgreSQL 后 `/health/ready` 返回 `database=true` 和 `rules=true`。
-- [ ] Docker 生产启动不包含 `--reload`。
-- [ ] `/v1/*` 全局有界并发队列测试覆盖正常进入、排队、队列满和排队超时，默认 4 worker 下覆盖容器总 `1000` in-flight + `2000` 排队目标。
-- [ ] `/admin/*`、`/admin/api/*`、`/health/*` 不进入 `/v1/*` 队列。
+- [x] Docker 生产启动不包含 `--reload`，Dockerfile 使用 `--workers ${UVICORN_WORKERS:-4}`。
+- [x] `/v1/*` 全局有界并发队列测试覆盖正常进入、排队、队列满和排队超时；默认 4 worker 下容器总 `1000` in-flight + `2000` 排队目标仍需生产压测验证。
+- [x] `/admin/*`、`/admin/api/*`、`/health/*` 不进入 `/v1/*` 队列。
 - [ ] `/admin/api/stats` 短缓存测试覆盖缓存命中和过期刷新。
 - [ ] 上游共享连接池测试覆盖配置传递和 client 生命周期关闭。
 - [ ] 归档/审计后台队列测试覆盖入队、批量消费、队列满降级和 shutdown drain。

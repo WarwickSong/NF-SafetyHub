@@ -399,6 +399,8 @@ admin/static/
 | `POST /admin/api/api-keys` | 阶段 5 | 创建 K-Sync APIKey / 阶段 6 由 Provider 创建 |
 | `POST /admin/api/api-keys/{id}/revoke` | 阶段 5/6 | 吊销 APIKey；Provider Key 会先同步吊销中转站 Key，成功后才标记本地 revoked |
 | `POST /admin/api/api-keys/{id}/reveal` | 阶段 6 | 按需返回完整 SafetyHub Key，用于后台显示/复制，写入管理员操作审计并设置 no-store |
+| `PATCH /admin/api/api-keys/{id}` | 阶段 5/6 | 更新名称、所属用户、部门、成本中心和过期时间 |
+| `DELETE /admin/api/api-keys/{id}` | 阶段 5/6 | 删除已吊销 APIKey，未吊销记录禁止删除 |
 | `POST /admin/api/api-keys/{id}/replace-upstream-key` | 阶段 5 | 单条替换上游 Key |
 | `POST /admin/api/api-keys/bulk-replace-upstream-keys` | 阶段 5 | CSV 批量替换上游 Key |
 | `POST /admin/api/api-keys/provider-migrate` | 阶段 6 迁移增强 | 路径 C 自动续约迁移，当前待实现 |
@@ -420,7 +422,7 @@ admin/static/
 - [x] 列表页默认只展示 Key 前后缀；完整 Key 仅通过受审计 reveal 接口按需显示/复制
 - [x] 单条替换上游 Key 后，客户端使用的 SafetyHub Key 不变
 - [x] CSV 批量替换支持执行和成功/失败结果汇总；独立上传预览与二次确认作为阶段 6/8 前端增强
-- [x] APIKey 创建、查看详情、吊销、替换动作均触发管理员操作审计
+- [x] APIKey 创建、更新、查看详情、吊销、删除已吊销 Key、替换动作均触发管理员操作审计
 
 **阶段 6**
 

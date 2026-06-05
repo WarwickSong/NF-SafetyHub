@@ -84,6 +84,7 @@ NF-SafetyHub/
 │   ├── test_fake_response.py
 │   ├── test_header_policy.py
 │   ├── test_health.py
+│   ├── test_image_assets.py
 │   ├── test_keyword.py
 │   ├── test_models.py
 │   ├── test_observations.py
@@ -1288,7 +1289,7 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
 | `runtime/upstream_client.py` | 创建和关闭共享 `httpx.AsyncClient`，封装连接池、keepalive、pool timeout 配置 | P0，实现后由 `proxy/relay.py` 复用 |
 | `runtime/archive_queue.py` | 维护归档/审计有界队列、批量消费、flush 和 shutdown drain | P1，先覆盖 Chat 归档和审计 |
 | `runtime/admin_cache.py` | 提供短 TTL 内存缓存，用于 `/admin/api/stats` 等高压查询保护 | P0，单 worker 内缓存即可 |
-| `runtime/metrics_snapshot.py` | 保存轻量运行快照，如 inflight、queue_size、reject_count、archive_queue_size | P1，先供日志和后台状态展示使用 |
+| 运行快照 | 当前由 `middleware/concurrency_limit.py` 的 `get_v1_concurrency_snapshot()`、`ArchiveQueue.snapshot()` 和 `/admin/api/runtime` 提供轻量运行快照；暂未单独拆分 `runtime/metrics_snapshot.py` | P1，先供后台状态展示和压测验证使用 |
 
 ---
 
