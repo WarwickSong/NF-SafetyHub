@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from typing import Any
 
 import httpx
@@ -16,7 +15,7 @@ class OneApiNanfuYxaiKeyProvider(KeyProvider):
         self._settings = settings
         self._base_url = settings.key_provider_base_url.rstrip("/")
         self._username = settings.key_provider_username
-        self._password = os.getenv(settings.key_provider_password_env, "")
+        self._password = settings.get_secret(settings.key_provider_password_env)
         self._auth_version = settings.key_provider_auth_version
         self._timeout = settings.key_provider_timeout_seconds
         self._login_retries = settings.key_provider_login_retries

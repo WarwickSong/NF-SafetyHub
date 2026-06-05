@@ -9,7 +9,7 @@ from engine.models import AggregatedScanResult, ScannerResult
 
 TEMPLATES = {
     "block": "抱歉，我无法处理您的请求。您输入的内容可能包含敏感信息，请检查后重试。如需帮助，请联系信息安全团队。",
-    "warn": "请注意，您输入的内容可能包含敏感信息，已记录并通知安全团队。",
+    "warn": "请注意，您输入的内容可能包含敏感信息，请检查后重试。",
 }
 
 

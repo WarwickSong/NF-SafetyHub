@@ -80,6 +80,28 @@ class Settings(BaseSettings):
     def is_production(self) -> bool:
         return self.environment == "production"
 
+    def get_secret(self, env_name: str) -> str:
+        value = os.getenv(env_name, "")
+        if value:
+            return value
+        env_file = self.model_config.get("env_file")
+        if not env_file:
+            return ""
+        configured_path = Path(str(env_file))
+        env_paths = [configured_path] if configured_path.is_absolute() else [Path.cwd() / configured_path, Path(__file__).resolve().parent / configured_path]
+        for env_path in dict.fromkeys(env_paths):
+            if not env_path.exists():
+                continue
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#") or "=" not in stripped:
+                    continue
+                key, raw_value = stripped.split("=", 1)
+                if key.strip() != env_name:
+                    continue
+                return raw_value.strip().strip('"').strip("'")
+        return ""
+
 
 def validate_startup_settings(settings: Settings) -> None:
     if not settings.is_production:
@@ -89,7 +111,7 @@ def validate_startup_settings(settings: Settings) -> None:
         missing.append("UPSTREAM_URL")
     if len(settings.admin_password) < 12:
         missing.append("ADMIN_PASSWORD")
-    if not os.getenv(settings.data_encryption_key_env):
+    if not settings.get_secret(settings.data_encryption_key_env):
         missing.append(settings.data_encryption_key_env)
     if settings.allow_empty_api_keys_passthrough:
         missing.append("ALLOW_EMPTY_API_KEYS_PASSTHROUGH=false")
@@ -98,7 +120,7 @@ def validate_startup_settings(settings: Settings) -> None:
             missing.append("KEY_PROVIDER_BASE_URL")
         if not settings.key_provider_username:
             missing.append("KEY_PROVIDER_USERNAME")
-        if not os.getenv(settings.key_provider_password_env):
+        if not settings.get_secret(settings.key_provider_password_env):
             missing.append(settings.key_provider_password_env)
         if not settings.key_provider_auth_version:
             missing.append("KEY_PROVIDER_AUTH_VERSION")

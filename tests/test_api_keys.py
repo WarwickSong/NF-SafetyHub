@@ -233,7 +233,10 @@ async def test_admin_api_key_crud_and_admin_operation_logging():
             json={"new_upstream_key": "sk-upstream-new"},
         )
         reveal_response = client.post(f"/admin/api/api-keys/{api_key_id}/reveal", auth=auth)
+        delete_active_response = client.delete(f"/admin/api/api-keys/{api_key_id}", auth=auth)
         revoke_response = client.post(f"/admin/api/api-keys/{api_key_id}/revoke", auth=auth)
+        delete_response = client.delete(f"/admin/api/api-keys/{api_key_id}", auth=auth)
+        list_after_delete_response = client.get("/admin/api/api-keys", auth=auth)
         operations_response = client.get("/admin/api/admin-ops?resource_type=api_key", auth=auth)
 
     assert create_response.status_code == 200
@@ -251,13 +254,19 @@ async def test_admin_api_key_crud_and_admin_operation_logging():
     assert reveal_response.status_code == 200
     assert reveal_response.json()["key"] == "sk-upstream-original"
     assert reveal_response.headers["cache-control"] == "no-store"
+    assert delete_active_response.status_code == 400
+    assert delete_active_response.json()["detail"] == "only revoked api key can be deleted"
     assert revoke_response.json()["item"]["status"] == "revoked"
+    assert delete_response.status_code == 200
+    assert delete_response.json()["api_key_id"] == api_key_id
+    assert list_after_delete_response.json()["pagination"]["total"] == 1
     assert {item["operation"] for item in operations_response.json()["items"]} >= {
         "api_key.create",
         "api_key.view_detail",
         "api_key.replace_upstream_key",
         "api_key.reveal",
         "api_key.revoke",
+        "api_key.delete",
     }
 
     await engine.dispose()
@@ -372,6 +381,32 @@ def test_production_startup_validation_requires_data_key_and_disables_empty_key_
     message = str(exc_info.value)
     assert "SAFETYHUB_DATA_KEY" in message
     assert "ALLOW_EMPTY_API_KEYS_PASSTHROUGH=false" in message
+
+
+def test_settings_get_secret_reads_env_file_named_secret(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text("KEY_PROVIDER_PASSWORD=from-env-file\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("KEY_PROVIDER_PASSWORD", raising=False)
+
+    active_settings = Settings(key_provider_password_env="KEY_PROVIDER_PASSWORD")
+
+    assert active_settings.get_secret("KEY_PROVIDER_PASSWORD") == "from-env-file"
+
+
+def test_settings_get_secret_reads_project_env_when_started_outside_project(tmp_path, monkeypatch):
+    cwd = tmp_path / "runtime"
+    project = tmp_path / "project"
+    cwd.mkdir()
+    project.mkdir()
+    (project / ".env").write_text("KEY_PROVIDER_PASSWORD=from-project-env\n", encoding="utf-8")
+    monkeypatch.chdir(cwd)
+    monkeypatch.delenv("KEY_PROVIDER_PASSWORD", raising=False)
+    monkeypatch.setattr("config.__file__", str(project / "config.py"))
+
+    active_settings = Settings(key_provider_password_env="KEY_PROVIDER_PASSWORD")
+
+    assert active_settings.get_secret("KEY_PROVIDER_PASSWORD") == "from-project-env"
 
 
 @pytest.mark.asyncio

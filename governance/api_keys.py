@@ -13,7 +13,7 @@ import secrets
 import uuid
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from config import settings
@@ -45,6 +45,9 @@ class ApiKeyCreateResult:
 @dataclass(slots=True)
 class ApiKeyUpdate:
     name: str | None = None
+    owner_user_id: str | None = None
+    owner_department: str | None = None
+    cost_center: str | None = None
     expires_at: datetime | None = None
 
 
@@ -240,6 +243,41 @@ class ApiKeyService:
                 return None
             record.status = "revoked"
             record.revoked_at = utc_now()
+            await session.commit()
+            await session.refresh(record)
+            return record
+
+    async def delete_revoked(self, api_key_id: str) -> bool | None:
+        async with self._session_factory() as session:
+            record = await session.get(ApiKeyRecord, api_key_id)
+            if record is None:
+                return None
+            if record.status != "revoked":
+                raise ValueError("only revoked api key can be deleted")
+            await session.execute(delete(ApiKeyRecord).where(ApiKeyRecord.id == api_key_id))
+            await session.commit()
+            return True
+
+    async def update(self, api_key_id: str, fields: dict[str, Any]) -> ApiKeyRecord | None:
+        if not fields:
+            return await self.get(api_key_id)
+        allowed = {"name", "owner_user_id", "owner_department", "cost_center", "expires_at"}
+        async with self._session_factory() as session:
+            record = await session.get(ApiKeyRecord, api_key_id)
+            if record is None:
+                return None
+            for field_name, value in fields.items():
+                if field_name not in allowed:
+                    continue
+                if field_name in {"name", "owner_user_id"}:
+                    if value is None:
+                        continue
+                    stripped = str(value).strip()
+                    if not stripped:
+                        continue
+                    setattr(record, field_name, stripped)
+                else:
+                    setattr(record, field_name, value)
             await session.commit()
             await session.refresh(record)
             return record

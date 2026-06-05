@@ -188,6 +188,9 @@ class ApiKeyCreateRequest(BaseModel):
 
 class ApiKeyUpdateRequest(BaseModel):
     name: str | None = None
+    owner_user_id: str | None = None
+    owner_department: str | None = None
+    cost_center: str | None = None
     expires_at: datetime | None = None
 
 
@@ -233,6 +236,11 @@ class ApiKeyRevealResponse(BaseModel):
     key: str
     key_prefix: str
     key_suffix: str
+
+
+class ApiKeyDeleteResponse(BaseModel):
+    status: str
+    api_key_id: str
 
 
 class ApiKeyBulkReplaceItem(BaseModel):

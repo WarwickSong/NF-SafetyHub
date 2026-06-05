@@ -1,9 +1,17 @@
 const SafetyHub = {
-  version: "0.4.0",
+  version: "0.4.4",
   async api(path, options = {}) {
     const response = await fetch(path, { headers: { Accept: "application/json", ...(options.headers || {}) }, ...options });
     if (!response.ok) {
-      throw new Error(`${response.status} ${response.statusText}`);
+      let detail = "";
+      try {
+        const payload = await response.json();
+        detail = payload.detail || payload.message || "";
+      } catch (error) {
+        detail = await response.text().catch(() => "");
+      }
+      const message = detail ? `${response.status} ${response.statusText}: ${detail}` : `${response.status} ${response.statusText}`;
+      throw new Error(message);
     }
     return response.json();
   },
@@ -36,7 +44,7 @@ async function loadPage(page) {
   if (page === "audits") return loadAudits();
   if (page === "observations") return loadObservations();
   if (page === "rules") return loadRules();
-  if (page === "apiKeys") return loadApiKeys();
+  if (page === "apiKeys") return setupApiKeysPage();
   if (page === "settings") return loadSettings();
   if (page === "placeholder") return loadPlaceholder();
 }
@@ -140,45 +148,176 @@ function setRulesMessage(message) {
   if (element) element.textContent = message;
 }
 
-async function loadApiKeys() {
-  document.getElementById("createApiKey")?.addEventListener("click", createApiKey, { once: true });
+async function setupApiKeysPage() {
+  document.getElementById("createApiKey")?.addEventListener("click", createApiKey);
+  document.getElementById("bulkReplaceApiKeys")?.addEventListener("click", bulkReplaceApiKeys);
+  ensureApiKeyModal();
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeApiKeyModal();
+  });
   const reuseUpstreamKey = document.getElementById("reuseUpstreamKey");
   if (reuseUpstreamKey) reuseUpstreamKey.onchange = toggleSafetyHubKeyInput;
   const createMode = document.getElementById("apiKeyCreateMode");
   if (createMode) createMode.onchange = toggleSafetyHubKeyInput;
-  document.getElementById("bulkReplaceApiKeys")?.addEventListener("click", bulkReplaceApiKeys, { once: true });
   toggleSafetyHubKeyInput();
+  await loadApiKeys();
+}
+
+async function loadApiKeys() {
   const payload = await SafetyHub.api("/admin/api/api-keys");
   const table = document.getElementById("apiKeysTable");
-  table.innerHTML = payload.items.map((item) => `<tr data-id="${item.id}" data-masked="${item.key_prefix}******${item.key_suffix}"><td>${SafetyHub.text(item.name)}</td><td>${SafetyHub.text(item.owner_user_id)}</td><td><span data-key-display>${item.key_prefix}******${item.key_suffix}</span> <button class="button small secondary" data-action="copy">复制</button> <button class="button small secondary" data-action="reveal">显示</button></td><td><span class="tag">${item.is_decoupled ? "K-Decoupled" : "K-Sync"}</span></td><td>${SafetyHub.text(item.upstream_key_prefix)}</td><td>由中转站管理</td><td>${item.status}</td><td>${SafetyHub.time(item.created_at)}</td><td><button class="button small secondary" data-action="replace">替换上游</button> <button class="button small secondary" data-action="revoke">吊销</button></td></tr>`).join("");
+  table.innerHTML = payload.items.map((item) => renderApiKeyRow(item)).join("");
   table.querySelectorAll("button[data-action]").forEach((button) => button.addEventListener("click", async (event) => {
     event.stopPropagation();
     const row = button.closest("tr");
-    if (button.dataset.action === "copy") await copyApiKey(row.dataset.id);
-    if (button.dataset.action === "reveal") await revealApiKey(row, button);
-    if (button.dataset.action === "replace") await replaceApiKey(row.dataset.id);
-    if (button.dataset.action === "revoke") await revokeApiKey(row.dataset.id);
+    const action = button.dataset.action;
+    if (action === "copy") return copyApiKey(row.dataset.id);
+    if (action === "reveal") return revealApiKey(row, button);
+    if (action === "replace") return replaceApiKey(row.dataset.id);
+    if (action === "revoke") return revokeApiKey(row.dataset.id);
+    if (action === "delete") return deleteApiKey(row.dataset.id);
+    if (action === "edit") return enterEditMode(row);
+    if (action === "save") return saveApiKey(row);
+    if (action === "cancel") return loadApiKeys();
   }));
 }
 
-async function createApiKey() {
-  setApiKeyMessage("创建中...");
-  const reuseUpstreamKey = document.getElementById("reuseUpstreamKey")?.checked !== false;
-  const createMode = document.getElementById("apiKeyCreateMode")?.value || "manual";
-  const payload = await SafetyHub.api("/admin/api/api-keys", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      name: inputValue("apiKeyName"),
-      owner_user_id: inputValue("apiKeyOwner"),
-      upstream_key: createMode === "manual" ? inputValue("apiKeyValue") : "",
-      reuse_upstream_key: reuseUpstreamKey,
-      create_mode: createMode
-    })
+function renderApiKeyRow(item) {
+  const masked = `${item.key_prefix}******${item.key_suffix}`;
+  const upstream = SafetyHub.text(item.upstream_key_prefix);
+  const mode = item.is_decoupled ? "K-Decoupled" : "K-Sync";
+  const expires = item.expires_at ? new Date(item.expires_at).toISOString().slice(0, 16) : "";
+  const deleteButton = item.status === "revoked" ? '<button class="button small secondary" data-action="delete">删除</button>' : "";
+  const itemJson = encodeURIComponent(JSON.stringify({
+    name: item.name || "",
+    owner_user_id: item.owner_user_id || "",
+    owner_department: item.owner_department || "",
+    cost_center: item.cost_center || "",
+    expires_at: item.expires_at || ""
+  }));
+  return `<tr data-id="${item.id}" data-masked="${masked}" data-item="${itemJson}">
+    <td data-field="name">
+      <div class="cell-display"><strong>${SafetyHub.text(item.name)}</strong></div>
+      <div class="cell-edit"><input data-edit="name" value="${escapeAttr(item.name || "")}" placeholder="名称"></div>
+    </td>
+    <td data-field="owner">
+      <div class="cell-display">
+        <div>${SafetyHub.text(item.owner_user_id)}</div>
+        <div class="cell-sub">${SafetyHub.text(item.owner_department)} · ${SafetyHub.text(item.cost_center)}</div>
+      </div>
+      <div class="cell-edit cell-edit-stack">
+        <input data-edit="owner_user_id" value="${escapeAttr(item.owner_user_id || "")}" placeholder="所属用户">
+        <input data-edit="owner_department" value="${escapeAttr(item.owner_department || "")}" placeholder="部门（可选）">
+        <input data-edit="cost_center" value="${escapeAttr(item.cost_center || "")}" placeholder="成本中心（可选）">
+      </div>
+    </td>
+    <td>
+      <span data-key-display>${masked}</span>
+      <div class="cell-actions">
+        <button class="button small secondary" data-action="copy">复制</button>
+        <button class="button small secondary" data-action="reveal">显示</button>
+      </div>
+    </td>
+    <td>
+      <span class="tag">${mode}</span>
+      <div class="cell-sub">上游：${upstream}</div>
+      <div class="cell-sub">${SafetyHub.text(item.provider_name)}</div>
+    </td>
+    <td>${item.status}</td>
+    <td data-field="expires_at">
+      <div class="cell-display">${item.expires_at ? SafetyHub.time(item.expires_at) : "-"}</div>
+      <div class="cell-edit"><input type="datetime-local" data-edit="expires_at" value="${expires}"></div>
+    </td>
+    <td>
+      <div class="cell-actions cell-actions-stack">
+        <div class="cell-display-actions">
+          <button class="button small secondary" data-action="edit">编辑</button>
+          <button class="button small secondary" data-action="replace">替换上游</button>
+          <button class="button small secondary" data-action="revoke">吊销</button>
+          ${deleteButton}
+        </div>
+        <div class="cell-edit-actions">
+          <button class="button small" data-action="save">保存</button>
+          <button class="button small secondary" data-action="cancel">取消</button>
+        </div>
+      </div>
+    </td>
+  </tr>`;
+}
+
+function escapeAttr(value) {
+  return String(value ?? "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function enterEditMode(row) {
+  row.classList.add("editing");
+}
+
+async function saveApiKey(row) {
+  const original = JSON.parse(decodeURIComponent(row.dataset.item || "%7B%7D"));
+  const fields = {};
+  row.querySelectorAll("input[data-edit]").forEach((input) => {
+    const name = input.dataset.edit;
+    const value = input.value.trim();
+    if (name === "expires_at") {
+      const normalized = value ? new Date(value).toISOString() : null;
+      const baseline = original.expires_at || null;
+      if (normalized !== baseline) fields[name] = normalized;
+      return;
+    }
+    if (value !== (original[name] || "")) {
+      if (name === "name" || name === "owner_user_id") {
+        if (!value) return;
+      }
+      fields[name] = value || null;
+    }
   });
-  document.getElementById("apiKeyValue").value = "";
-  setApiKeyMessage(payload.safetyhub_key ? `APIKey 已创建，请复制保存：${payload.safetyhub_key}` : "APIKey 已创建，列表仅展示前后缀，可按需点击显示或复制完整 Key。");
+  if (Object.keys(fields).length === 0) {
+    setApiKeyMessage("没有需要保存的修改。");
+    row.classList.remove("editing");
+    return;
+  }
+  setApiKeyMessage("保存中...");
+  await SafetyHub.api(`/admin/api/api-keys/${encodeURIComponent(row.dataset.id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(fields)
+  });
+  setApiKeyMessage("APIKey 已更新。");
   await loadApiKeys();
+}
+
+async function createApiKey() {
+  const button = document.getElementById("createApiKey");
+  if (button?.disabled) return;
+  showApiKeyModal("APIKey 创建", "正在创建 APIKey，请稍候...");
+  setButtonBusy(button, true, "创建中...");
+  try {
+    const reuseUpstreamKey = document.getElementById("reuseUpstreamKey")?.checked !== false;
+    const createMode = document.getElementById("apiKeyCreateMode")?.value || "manual";
+    const payload = await SafetyHub.api("/admin/api/api-keys", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: inputValue("apiKeyName"),
+        owner_user_id: inputValue("apiKeyOwner"),
+        upstream_key: createMode === "manual" ? inputValue("apiKeyValue") : "",
+        reuse_upstream_key: reuseUpstreamKey,
+        create_mode: createMode
+      })
+    });
+    document.getElementById("apiKeyValue").value = "";
+    showApiKeyModal(
+      "APIKey 创建成功",
+      payload.safetyhub_key ? "APIKey 已创建，请复制并妥善保存。" : "APIKey 已创建，列表仅展示前后缀，可按需点击显示或复制完整 Key。",
+      payload.safetyhub_key
+    );
+    await loadApiKeys();
+  } catch (error) {
+    showApiKeyModal("APIKey 创建失败", error.message);
+  } finally {
+    setButtonBusy(button, false);
+  }
 }
 
 function toggleSafetyHubKeyInput() {
@@ -195,9 +334,14 @@ async function revealSecret(apiKeyId) {
 }
 
 async function copyApiKey(apiKeyId) {
-  const payload = await revealSecret(apiKeyId);
-  await navigator.clipboard.writeText(payload.key);
-  setApiKeyMessage("完整 Key 已复制，本次操作已记录审计。");
+  try {
+    const payload = await revealSecret(apiKeyId);
+    const copied = await copyText(payload.key);
+    setApiKeyMessage(copied ? "完整 Key 已复制，本次操作已记录审计。" : "浏览器未允许自动复制，完整 Key 已显示，请手动复制。");
+    if (!copied) showApiKeyModal("请手动复制 APIKey", "浏览器未允许自动写入剪贴板，请从下方复制完整 Key。", payload.key);
+  } catch (error) {
+    setApiKeyMessage(`复制失败：${error.message}`);
+  }
 }
 
 async function revealApiKey(row, button) {
@@ -229,8 +373,19 @@ async function replaceApiKey(apiKeyId) {
 
 async function revokeApiKey(apiKeyId) {
   await SafetyHub.api(`/admin/api/api-keys/${encodeURIComponent(apiKeyId)}/revoke`, { method: "POST" });
-  setApiKeyMessage("APIKey 已吊销。");
+  setApiKeyMessage("APIKey 已吊销，可在列表中点击删除移除本地记录。");
   await loadApiKeys();
+}
+
+async function deleteApiKey(apiKeyId) {
+  if (!window.confirm("确认从 SafetyHub 删除这条已吊销的 APIKey 记录？此操作不会恢复。")) return;
+  try {
+    await SafetyHub.api(`/admin/api/api-keys/${encodeURIComponent(apiKeyId)}`, { method: "DELETE" });
+    setApiKeyMessage("APIKey 本地记录已删除。");
+    await loadApiKeys();
+  } catch (error) {
+    setApiKeyMessage(`删除失败：${error.message}`);
+  }
 }
 
 async function bulkReplaceApiKeys() {
@@ -246,6 +401,130 @@ async function bulkReplaceApiKeys() {
 function setApiKeyMessage(message) {
   const element = document.getElementById("apiKeyMessage");
   if (element) element.textContent = message;
+}
+
+function ensureApiKeyModal() {
+  if (document.getElementById("apiKeyModal")) {
+    bindApiKeyModalEvents();
+    return;
+  }
+  document.body.insertAdjacentHTML("beforeend", `<div class="modal" id="apiKeyModal" role="dialog" aria-modal="true" aria-labelledby="apiKeyModalTitle" hidden>
+    <div class="modal-panel">
+      <div class="modal-header">
+        <h2 id="apiKeyModalTitle">APIKey 创建</h2>
+        <button class="modal-close" type="button" data-modal-close aria-label="关闭">×</button>
+      </div>
+      <p class="modal-message" id="apiKeyModalMessage"></p>
+      <div class="secret-box" id="apiKeySecretWrap" hidden>
+        <span>完整 APIKey</span>
+        <code id="apiKeyModalSecret"></code>
+      </div>
+      <div class="modal-actions">
+        <button class="button secondary" type="button" id="apiKeyModalCopy" hidden>复制 Key</button>
+        <button class="button" type="button" data-modal-close>关闭</button>
+      </div>
+    </div>
+  </div>`);
+  bindApiKeyModalEvents();
+}
+
+function bindApiKeyModalEvents() {
+  document.querySelectorAll("[data-modal-close]").forEach((button) => {
+    if (button.dataset.bound === "true") return;
+    button.dataset.bound = "true";
+    button.addEventListener("click", closeApiKeyModal);
+  });
+  const modal = document.getElementById("apiKeyModal");
+  if (modal && modal.dataset.bound !== "true") {
+    modal.dataset.bound = "true";
+    modal.addEventListener("click", (event) => {
+      if (event.target.id === "apiKeyModal") closeApiKeyModal();
+    });
+  }
+  const copyButton = document.getElementById("apiKeyModalCopy");
+  if (copyButton && copyButton.dataset.bound !== "true") {
+    copyButton.dataset.bound = "true";
+    copyButton.addEventListener("click", copyCreatedApiKey);
+  }
+}
+
+function showApiKeyModal(title, message, secret) {
+  ensureApiKeyModal();
+  const modal = document.getElementById("apiKeyModal");
+  const titleElement = document.getElementById("apiKeyModalTitle");
+  const messageElement = document.getElementById("apiKeyModalMessage");
+  const secretWrap = document.getElementById("apiKeySecretWrap");
+  const secretElement = document.getElementById("apiKeyModalSecret");
+  const copyButton = document.getElementById("apiKeyModalCopy");
+  if (!modal) return;
+  if (titleElement) titleElement.textContent = title;
+  if (messageElement) messageElement.textContent = message;
+  if (secretWrap) secretWrap.hidden = !secret;
+  if (secretElement) secretElement.textContent = secret || "";
+  if (copyButton) {
+    copyButton.hidden = !secret;
+    copyButton.dataset.key = secret || "";
+    copyButton.textContent = "复制 Key";
+  }
+  modal.hidden = false;
+  modal.removeAttribute("hidden");
+  modal.classList.add("active");
+}
+
+function closeApiKeyModal() {
+  const modal = document.getElementById("apiKeyModal");
+  if (!modal) return;
+  modal.hidden = true;
+  modal.setAttribute("hidden", "");
+  modal.classList.remove("active");
+}
+
+async function copyCreatedApiKey() {
+  const button = document.getElementById("apiKeyModalCopy");
+  const key = button?.dataset.key || "";
+  if (!key) return;
+  const copied = await copyText(key);
+  button.textContent = copied ? "已复制" : "请手动复制";
+}
+
+async function copyText(text) {
+  if (!text) return false;
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (error) {
+      return copyTextFallback(text);
+    }
+  }
+  return copyTextFallback(text);
+}
+
+function copyTextFallback(text) {
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch (error) {
+    copied = false;
+  }
+  textarea.remove();
+  return copied;
+}
+
+function setButtonBusy(button, busy, label) {
+  if (!button) return;
+  if (!button.dataset.defaultText) button.dataset.defaultText = button.textContent;
+  button.disabled = busy;
+  button.textContent = busy ? label : button.dataset.defaultText;
 }
 
 async function loadSettings() {

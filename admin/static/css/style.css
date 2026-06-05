@@ -129,6 +129,11 @@ p {
   cursor: pointer;
 }
 
+.button:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
 .button.secondary {
   color: var(--text);
   background: #e5e7eb;
@@ -147,6 +152,85 @@ p {
 .inline-message {
   min-height: 24px;
   color: var(--brand);
+}
+
+.modal[hidden] {
+  display: none !important;
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.45);
+}
+
+.modal-panel {
+  width: min(560px, 100%);
+  border-radius: 18px;
+  padding: 22px;
+  background: #ffffff;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.28);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.modal-header h2 {
+  margin: 0;
+}
+
+.modal-close {
+  border: 0;
+  border-radius: 999px;
+  width: 32px;
+  height: 32px;
+  color: var(--muted);
+  background: #f1f5f9;
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.modal-message {
+  margin-bottom: 14px;
+  color: var(--text);
+}
+
+.secret-box {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.secret-box span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.secret-box code {
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-family: Consolas, monospace;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
 }
 
 .filters {
@@ -173,25 +257,60 @@ textarea {
 .form-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
+  gap: 12px;
 }
 
-.api-key-form {
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+.field {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
 }
 
-.api-key-form input,
-.api-key-form .button {
+.field > input,
+.field > select {
   width: 100%;
 }
 
-.api-key-form > input:nth-child(-n + 3) {
+.field-wide {
   grid-column: span 2;
+}
+
+.api-key-form {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.api-key-form .field {
+  grid-column: span 1;
+}
+
+.api-key-form .field-wide {
+  grid-column: span 2;
+}
+
+.api-key-form .checkbox-field {
+  grid-column: span 4;
+}
+
+.api-key-form .form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  grid-column: span 4;
+}
+
+.api-key-form .form-actions .form-hint {
+  margin: 0;
+  flex: 1;
+}
+
+.api-key-form .form-actions .button {
+  flex-shrink: 0;
 }
 
 .checkbox-field {
   display: flex;
-  grid-column: span 3;
   align-items: center;
   gap: 8px;
   color: var(--muted);
@@ -204,19 +323,101 @@ textarea {
 }
 
 .form-hint {
-  grid-column: span 2;
-  align-self: center;
+  margin: 0 0 12px;
   color: var(--muted);
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.6;
 }
 
 .form-hint.active {
   color: var(--brand);
 }
 
-.api-key-form .button {
-  grid-column: span 1;
+.form-hint code {
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: #f1f5f9;
+  font-family: Consolas, monospace;
+  font-size: 12px;
+}
+
+.card-header {
+  margin-bottom: 14px;
+}
+
+.card-header h2 {
+  margin-bottom: 6px;
+}
+
+.card-header .form-hint {
+  margin: 0;
+}
+
+/* APIKey 列表内联编辑 */
+.api-key-table th,
+.api-key-table td {
+  vertical-align: middle;
+}
+
+.api-key-table tbody tr {
+  cursor: default;
+}
+
+.api-key-table .cell-edit,
+.api-key-table .cell-edit-actions {
+  display: none;
+}
+
+.api-key-table tr.editing .cell-display,
+.api-key-table tr.editing .cell-display-actions {
+  display: none;
+}
+
+.api-key-table tr.editing .cell-edit,
+.api-key-table tr.editing .cell-edit-actions {
+  display: flex;
+}
+
+.api-key-table .cell-edit input {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+
+.api-key-table .cell-edit-stack {
+  flex-direction: column;
+  gap: 6px;
+}
+
+.api-key-table .cell-sub {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.api-key-table .cell-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.api-key-table .cell-actions-stack {
+  flex-direction: column;
+  align-items: stretch;
+  margin-top: 0;
+}
+
+.api-key-table .cell-display-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.api-key-table .cell-edit-actions {
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .table-wrap {

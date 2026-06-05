@@ -14,7 +14,7 @@ from storage.database import close_db, get_session_factory, init_db
 from storage.models import ApiKeyRecord, utc_now
 
 # 导入 YXAI 密钥
-DEFAULT_INPUT_PATH = Path(__file__).resolve().parents[2] / "中转站" / "LLM-relay" / "yxai_token_export.json"
+DEFAULT_INPUT_PATH = Path("./yxai_token_export.json")
 TARGET_PROVIDER_NAME = "oneapi_nanfu_yxai"
 LEGACY_PROVIDER_NAMES = {"oneapi_yxai", TARGET_PROVIDER_NAME}
 

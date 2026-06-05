@@ -16,11 +16,13 @@ from admin.schemas import (
     ApiKeyBulkReplaceRequest,
     ApiKeyBulkReplaceResponse,
     ApiKeyCreateRequest,
+    ApiKeyDeleteResponse,
     ApiKeyItem,
     ApiKeyListResponse,
     ApiKeyMutationResponse,
     ApiKeyReplaceRequest,
     ApiKeyRevealResponse,
+    ApiKeyUpdateRequest,
     ArchiveDetail,
     ArchiveListResponse,
     ArchiveStatsResponse,
@@ -327,6 +329,21 @@ async def get_api_key(request: Request, api_key_id: str):
     return _api_key_to_item(record)
 
 
+@router.patch("/api-keys/{api_key_id}", response_model=ApiKeyMutationResponse)
+async def update_api_key(request: Request, api_key_id: str, payload: ApiKeyUpdateRequest):
+    fields = payload.model_dump(exclude_unset=True)
+    if not fields:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No editable fields provided")
+    try:
+        record = await _api_key_service(request).update(api_key_id, fields)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="APIKey not found")
+    await _write_admin_operation(request, "api_key.update", "api_key", api_key_id)
+    return ApiKeyMutationResponse(status="ok", item=_api_key_to_item(record))
+
+
 @router.post("/api-keys/{api_key_id}/reveal", response_model=ApiKeyRevealResponse)
 async def reveal_api_key(request: Request, response: Response, api_key_id: str):
     raw_key = await _api_key_service(request).reveal_safetyhub_key(api_key_id)
@@ -349,6 +366,18 @@ async def revoke_api_key(request: Request, api_key_id: str):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="APIKey not found")
     await _write_admin_operation(request, "api_key.revoke", "api_key", api_key_id)
     return ApiKeyMutationResponse(status="ok", item=_api_key_to_item(record))
+
+
+@router.delete("/api-keys/{api_key_id}", response_model=ApiKeyDeleteResponse)
+async def delete_api_key(request: Request, api_key_id: str):
+    try:
+        deleted = await _api_key_service(request).delete_revoked(api_key_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if deleted is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="APIKey not found")
+    await _write_admin_operation(request, "api_key.delete", "api_key", api_key_id)
+    return ApiKeyDeleteResponse(status="ok", api_key_id=api_key_id)
 
 
 @router.post("/api-keys/{api_key_id}/replace-upstream-key", response_model=ApiKeyMutationResponse)
