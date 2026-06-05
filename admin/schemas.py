@@ -112,6 +112,15 @@ class AdminStatsResponse(BaseModel):
     recent_trend: list[TrendPoint]
 
 
+class RuntimeStatusResponse(BaseModel):
+    worker_pid: int
+    configured_workers: int
+    v1_concurrency: dict[str, Any]
+    archive_queue: dict[str, Any]
+    upstream: dict[str, Any]
+    admin: dict[str, Any]
+
+
 class ObservationItem(ArchiveDetail):
     pass
 

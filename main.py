@@ -11,12 +11,18 @@ from engine.rules_keyword import KeywordScanner
 from engine.rules_regex import RegexScanner
 from engine.scanner import ScannerOrchestrator
 from middleware.auth import AdminStaticAuthMiddleware
+from middleware.concurrency_limit import V1ConcurrencyLimitMiddleware
 from middleware.identity import ApiKeyIdentityMiddleware
 from middleware.request_limit import RequestBodyLimitMiddleware
 from observability.health import router as health_router
 from observability.request_id import RequestIdMiddleware
 from proxy.relay import router as relay_router
 from proxy.upstream_router import get_default_upstream_router
+from runtime.admin_cache import AdminStatsCache
+from runtime.archive_queue import ArchiveQueue
+from runtime.upstream_client import create_upstream_client
+from storage.archive import ArchiveWriter
+from storage.audit import AuditWriter
 from storage.database import close_db, get_session_factory, init_db
 from governance.api_keys import ApiKeyService
 from governance.key_provider import create_key_provider
@@ -45,10 +51,18 @@ async def lifespan(app: FastAPI):
     app.state.key_provider = create_key_provider(settings)
     app.state.api_key_service = ApiKeyService(app.state.session_factory, key_provider=app.state.key_provider)
     app.state.upstream_router = get_default_upstream_router()
+    app.state.upstream_client = create_upstream_client()
+    app.state.archive_writer = ArchiveWriter(app.state.session_factory)
+    app.state.audit_writer = AuditWriter(app.state.session_factory)
+    app.state.archive_queue = ArchiveQueue(app.state.archive_writer, app.state.audit_writer)
+    app.state.archive_queue.start()
+    app.state.admin_stats_cache = AdminStatsCache()
     app.state.rules_reload_task = reload_task
     try:
         yield
     finally:
+        await app.state.archive_queue.stop()
+        await app.state.upstream_client.aclose()
         reload_task.cancel()
         with suppress(asyncio.CancelledError):
             await reload_task
@@ -62,10 +76,11 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.add_middleware(RequestIdMiddleware)
-app.add_middleware(RequestBodyLimitMiddleware)
-app.add_middleware(ApiKeyIdentityMiddleware)
 app.add_middleware(AdminStaticAuthMiddleware)
+app.add_middleware(ApiKeyIdentityMiddleware)
+app.add_middleware(RequestBodyLimitMiddleware)
+app.add_middleware(V1ConcurrencyLimitMiddleware)
+app.add_middleware(RequestIdMiddleware)
 app.include_router(health_router, prefix="/health", tags=["health"])
 app.include_router(admin_router, prefix="/admin/api", tags=["admin"])
 app.include_router(relay_router, prefix="/v1", tags=["relay"])

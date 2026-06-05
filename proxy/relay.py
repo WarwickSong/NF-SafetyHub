@@ -8,7 +8,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from config import settings
 from engine.models import AggregatedScanResult
@@ -20,6 +20,8 @@ from proxy.upstream_router import UpstreamRouter, get_default_upstream_router
 from storage.archive import ArchivePayload, ArchiveWriter
 from storage.audit import AuditPayload, AuditWriter
 from storage.image_assets import ImageAssetArchiver, extract_image_asset_sources
+
+STREAM_ARCHIVE_ENCODING = "utf-8"
 
 router = APIRouter()
 
@@ -66,8 +68,8 @@ async def relay_openai_compatible(request: Request, upstream_path: str):
             scan_result = await scanner.scan(latest_scan_text)
             if scan_result.blocked and isinstance(body, dict):
                 fake_response = await generate_fake_response(body, scan_result, is_stream)
-                await _write_chat_audit(request, scan_result, latest_scan_text, "blocked")
-                await _write_chat_archive(request, original_body, body, _response_archive_body(fake_response), scan_result, "blocked", is_stream, started_at, identity)
+                _write_chat_audit(request, scan_result, latest_scan_text, "blocked")
+                _write_chat_archive(request, original_body, body, _response_archive_body(fake_response), scan_result, "blocked", is_stream, started_at, identity)
                 return fake_response
         if isinstance(body, dict):
             desensitized_body = desensitize_chat_request_body(body)
@@ -77,7 +79,7 @@ async def relay_openai_compatible(request: Request, upstream_path: str):
     upstream_router = getattr(request.app.state, "upstream_router", None) or get_default_upstream_router()
     action_taken = _action_from_scan_result(scan_result, was_desensitized) if path == CHAT_COMPLETIONS_PATH else "passed"
     if path == CHAT_COMPLETIONS_PATH:
-        await _write_chat_audit(request, scan_result, latest_scan_text, action_taken)
+        _write_chat_audit(request, scan_result, latest_scan_text, action_taken)
     response = await _relay_to_upstream(
         request,
         path,
@@ -93,9 +95,9 @@ async def relay_openai_compatible(request: Request, upstream_path: str):
         capability,
     )
     if path == CHAT_COMPLETIONS_PATH and not is_stream:
-        await _write_chat_archive(request, original_body, body, _response_archive_body(response), scan_result, action_taken, is_stream, started_at, identity)
+        _write_chat_archive(request, original_body, body, _response_archive_body(response), scan_result, action_taken, is_stream, started_at, identity)
     elif path.startswith("/v1/images/"):
-        await _write_image_archive(request, original_body, response, started_at, identity)
+        _write_image_archive(request, original_body, response, started_at, identity)
     return response
 
 
@@ -120,11 +122,16 @@ async def _relay_to_upstream(
     url = _append_query_string(route.build_url(path), request.url.query)
     upstream_api_key = identity.upstream_api_key if identity and identity.upstream_api_key else None
     headers = build_upstream_headers(request.headers, getattr(request.state, "request_id", None), upstream_api_key)
-    timeout = httpx.Timeout(connect=route.timeout_connect, read=route.timeout_read, write=route.timeout_connect, pool=route.timeout_connect)
-    if is_stream and request.method in JSON_BODY_METHODS and isinstance(body, dict):
+    client = getattr(request.app.state, "upstream_client", None)
+    client_owner = False
+    if client is None:
+        timeout = httpx.Timeout(connect=route.timeout_connect, read=route.timeout_read, write=route.timeout_connect, pool=settings.upstream_timeout_pool)
         client = httpx.AsyncClient(timeout=timeout)
+        client_owner = True
+    if is_stream and request.method in JSON_BODY_METHODS and isinstance(body, dict):
         stream = _stream_with_archive(
             client,
+            client_owner,
             request.method,
             url,
             headers,
@@ -135,21 +142,32 @@ async def _relay_to_upstream(
             action_taken,
             started_at,
             identity,
-        ) if path == CHAT_COMPLETIONS_PATH else _stream_with_client_close(client, request.method, url, headers, body)
+        ) if path == CHAT_COMPLETIONS_PATH else _stream_with_client_close(client, client_owner, request.method, url, headers, body)
         return StreamingResponse(stream, media_type="text/event-stream")
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    try:
         request_kwargs: dict[str, Any] = {"headers": headers}
         if request.method in JSON_BODY_METHODS:
             if body is not None:
                 request_kwargs["json"] = body
             elif raw_body:
                 request_kwargs["content"] = raw_body
-        upstream_response = await client.request(request.method, url, **request_kwargs)
+        try:
+            upstream_response = await client.request(request.method, url, **request_kwargs)
+        except httpx.PoolTimeout as exc:
+            return _build_upstream_error_response(exc, 429, "upstream connection pool exhausted")
+        except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.WriteTimeout, httpx.TimeoutException) as exc:
+            return _build_upstream_error_response(exc, 504, "upstream request timed out")
+        except httpx.TransportError as exc:
+            return _build_upstream_error_response(exc, 502, "upstream transport error")
         return _build_response(upstream_response)
+    finally:
+        if client_owner:
+            await client.aclose()
 
 
 async def _stream_with_client_close(
     client: httpx.AsyncClient,
+    client_owner: bool,
     method: str,
     url: str,
     headers: dict[str, str],
@@ -159,11 +177,13 @@ async def _stream_with_client_close(
         async for chunk in SSEStreamProxy.proxy_stream(client, method, url, headers, body):
             yield chunk
     finally:
-        await client.aclose()
+        if client_owner:
+            await client.aclose()
 
 
 async def _stream_with_archive(
     client: httpx.AsyncClient,
+    client_owner: bool,
     method: str,
     url: str,
     headers: dict[str, str],
@@ -175,15 +195,15 @@ async def _stream_with_archive(
     started_at: float,
     identity: RequestIdentity | None = None,
 ):
-    chunks: list[bytes] = []
+    collector = StreamArchiveCollector(settings.stream_archive_max_bytes)
     try:
         async for chunk in SSEStreamProxy.proxy_stream(client, method, url, headers, body):
-            chunks.append(chunk)
+            collector.add(chunk)
             yield chunk
     finally:
-        await client.aclose()
-        response_body = _stream_archive_body(chunks)
-        await _write_chat_archive(request, original_body, body, response_body, scan_result, action_taken, True, started_at, identity)
+        if client_owner:
+            await client.aclose()
+        _write_chat_archive(request, original_body, body, collector.payload(), scan_result, action_taken, True, started_at, identity)
 
 
 def _build_response(upstream_response: httpx.Response) -> Response:
@@ -193,6 +213,13 @@ def _build_response(upstream_response: httpx.Response) -> Response:
         status_code=upstream_response.status_code,
         headers=headers,
         media_type=upstream_response.headers.get("content-type"),
+    )
+
+
+def _build_upstream_error_response(exc: httpx.HTTPError, status_code: int, detail: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={"detail": detail, "error_type": exc.__class__.__name__},
     )
 
 
@@ -219,20 +246,41 @@ def _response_archive_body(response: Response | StreamingResponse) -> Any:
     return {"media_type": media_type, "content": content}
 
 
+class StreamArchiveCollector:
+    def __init__(self, max_bytes: int):
+        self._max_bytes = max(1, max_bytes)
+        self._chunks: list[bytes] = []
+        self._archived_bytes = 0
+        self._original_bytes = 0
+
+    def add(self, chunk: bytes) -> None:
+        self._original_bytes += len(chunk)
+        remaining = self._max_bytes - self._archived_bytes
+        if remaining <= 0:
+            return
+        archived_chunk = chunk[:remaining]
+        self._chunks.append(archived_chunk)
+        self._archived_bytes += len(archived_chunk)
+
+    def payload(self) -> dict[str, Any]:
+        content_bytes = b"".join(self._chunks)
+        raw_content = content_bytes.decode(STREAM_ARCHIVE_ENCODING, errors="replace")
+        return {
+            "stream": True,
+            "media_type": "text/event-stream",
+            "content": raw_content,
+            "message_content": _extract_sse_message_content(raw_content),
+            "truncated": self._original_bytes > self._max_bytes,
+            "archived_bytes": self._archived_bytes,
+            "original_bytes": self._original_bytes,
+        }
+
+
 def _stream_archive_body(chunks: list[bytes]) -> dict[str, Any]:
-    content_bytes = b"".join(chunks)
-    max_bytes = max(1, settings.stream_archive_max_bytes)
-    truncated = len(content_bytes) > max_bytes
-    raw_content = content_bytes[:max_bytes].decode("utf-8", errors="replace")
-    return {
-        "stream": True,
-        "media_type": "text/event-stream",
-        "content": raw_content,
-        "message_content": _extract_sse_message_content(raw_content),
-        "truncated": truncated,
-        "archived_bytes": min(len(content_bytes), max_bytes),
-        "original_bytes": len(content_bytes),
-    }
+    collector = StreamArchiveCollector(settings.stream_archive_max_bytes)
+    for chunk in chunks:
+        collector.add(chunk)
+    return collector.payload()
 
 
 def _extract_sse_message_content(raw_content: str) -> str:
@@ -263,7 +311,7 @@ def _extract_sse_message_content(raw_content: str) -> str:
     return "".join(parts)
 
 
-async def _write_chat_archive(
+def _write_chat_archive(
     request: Request,
     original_body: Any,
     relayed_body: Any,
@@ -276,35 +324,36 @@ async def _write_chat_archive(
 ) -> None:
     if not isinstance(original_body, dict):
         return
-    try:
-        request_id = getattr(request.state, "request_id", "")
-        writer = getattr(request.app.state, "archive_writer", None) or ArchiveWriter()
-        matched_rule_ids = [result.rule_id for result in scan_result.results if result.hit and result.rule_id] if scan_result else []
-        block_result = scan_result.block_result if scan_result else None
-        await writer.write(
-            ArchivePayload(
-                request_id=request_id,
-                user_id=identity.user_id if identity else "",
-                api_key_id=identity.api_key_id if identity else "",
-                model=original_body.get("model", ""),
-                capability="chat",
-                prompt_original=original_body.get("messages", []),
-                prompt_desensitized=relayed_body.get("messages", []) if isinstance(relayed_body, dict) else original_body.get("messages", []),
-                response=response_body,
-                is_stream=is_stream,
-                is_blocked=action_taken == "blocked",
-                is_desensitized=action_taken == "desensitized",
-                action_taken=action_taken,
-                blocked_rule_id=block_result.rule_id if block_result else "",
-                matched_rule_ids=matched_rule_ids,
-                latency_ms=int((perf_counter() - started_at) * 1000),
-            )
-        )
-    except Exception:
+    request_id = getattr(request.state, "request_id", "")
+    matched_rule_ids = [result.rule_id for result in scan_result.results if result.hit and result.rule_id] if scan_result else []
+    block_result = scan_result.block_result if scan_result else None
+    payload = ArchivePayload(
+        request_id=request_id,
+        user_id=identity.user_id if identity else "",
+        api_key_id=identity.api_key_id if identity else "",
+        model=original_body.get("model", ""),
+        capability="chat",
+        prompt_original=original_body.get("messages", []),
+        prompt_desensitized=relayed_body.get("messages", []) if isinstance(relayed_body, dict) else original_body.get("messages", []),
+        response=response_body,
+        is_stream=is_stream,
+        is_blocked=action_taken == "blocked",
+        is_desensitized=action_taken == "desensitized",
+        action_taken=action_taken,
+        blocked_rule_id=block_result.rule_id if block_result else "",
+        matched_rule_ids=matched_rule_ids,
+        latency_ms=int((perf_counter() - started_at) * 1000),
+    )
+    archive_queue = getattr(request.app.state, "archive_queue", None)
+    if archive_queue is not None and archive_queue.enqueue_archive(payload):
         return
+    writer = getattr(request.app.state, "archive_writer", None)
+    if writer is None:
+        return
+    asyncio.create_task(_safe_write_archive(writer, payload))
 
 
-async def _write_image_archive(
+def _write_image_archive(
     request: Request,
     original_body: Any,
     response: Response | StreamingResponse,
@@ -313,28 +362,29 @@ async def _write_image_archive(
 ) -> None:
     if not isinstance(original_body, dict) or isinstance(response, StreamingResponse):
         return
-    try:
-        request_id = getattr(request.state, "request_id", "")
-        writer = getattr(request.app.state, "archive_writer", None) or ArchiveWriter()
-        response_payload = _parse_response_json(response)
-        metadata = _build_image_metadata(original_body, response_payload)
-        await _schedule_image_asset_archive(request, request_id, response_payload)
-        await writer.write(
-            ArchivePayload(
-                request_id=request_id,
-                user_id=identity.user_id if identity else "",
-                api_key_id=identity.api_key_id if identity else "",
-                model=original_body.get("model", ""),
-                capability="image",
-                prompt_original=original_body.get("prompt", ""),
-                prompt_desensitized=original_body.get("prompt", ""),
-                response=_response_archive_body(response),
-                image_metadata=metadata,
-                latency_ms=int((perf_counter() - started_at) * 1000),
-            )
-        )
-    except Exception:
+    request_id = getattr(request.state, "request_id", "")
+    response_payload = _parse_response_json(response)
+    metadata = _build_image_metadata(original_body, response_payload)
+    asyncio.create_task(_schedule_image_asset_archive(request, request_id, response_payload))
+    payload = ArchivePayload(
+        request_id=request_id,
+        user_id=identity.user_id if identity else "",
+        api_key_id=identity.api_key_id if identity else "",
+        model=original_body.get("model", ""),
+        capability="image",
+        prompt_original=original_body.get("prompt", ""),
+        prompt_desensitized=original_body.get("prompt", ""),
+        response=_response_archive_body(response),
+        image_metadata=metadata,
+        latency_ms=int((perf_counter() - started_at) * 1000),
+    )
+    archive_queue = getattr(request.app.state, "archive_queue", None)
+    if archive_queue is not None and archive_queue.enqueue_archive(payload):
         return
+    writer = getattr(request.app.state, "archive_writer", None)
+    if writer is None:
+        return
+    asyncio.create_task(_safe_write_archive(writer, payload))
 
 
 def _build_image_metadata(request_body: dict[str, Any], response_payload: Any) -> dict[str, Any]:
@@ -400,7 +450,7 @@ async def _schedule_image_asset_archive(request: Request, request_id: str, respo
     task.add_done_callback(tasks.discard)
 
 
-async def _write_chat_audit(
+def _write_chat_audit(
     request: Request,
     scan_result: AggregatedScanResult | None,
     scanned_text: str,
@@ -408,17 +458,32 @@ async def _write_chat_audit(
 ) -> None:
     if scan_result is None or not scan_result.hit:
         return
+    payload = AuditPayload(
+        request_id=getattr(request.state, "request_id", ""),
+        scan_result=scan_result,
+        action_taken=action_taken,
+        user_id=getattr(getattr(request.state, "identity", None), "user_id", ""),
+        scanned_text=scanned_text,
+    )
+    archive_queue = getattr(request.app.state, "archive_queue", None)
+    if archive_queue is not None and archive_queue.enqueue_audit(payload):
+        return
+    writer = getattr(request.app.state, "audit_writer", None)
+    if writer is None:
+        return
+    asyncio.create_task(_safe_write_audit(writer, payload))
+
+
+async def _safe_write_archive(writer: ArchiveWriter, payload: ArchivePayload) -> None:
     try:
-        writer = getattr(request.app.state, "audit_writer", None) or AuditWriter()
-        await writer.write_scan_result(
-            AuditPayload(
-                request_id=getattr(request.state, "request_id", ""),
-                scan_result=scan_result,
-                action_taken=action_taken,
-                user_id=getattr(getattr(request.state, "identity", None), "user_id", ""),
-                scanned_text=scanned_text,
-            )
-        )
+        await writer.write(payload)
+    except Exception:
+        return
+
+
+async def _safe_write_audit(writer: AuditWriter, payload: AuditPayload) -> None:
+    try:
+        await writer.write_scan_result(payload)
     except Exception:
         return
 

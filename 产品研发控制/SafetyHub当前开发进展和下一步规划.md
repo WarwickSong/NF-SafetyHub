@@ -1,18 +1,18 @@
 # LLM-SafetyHub 当前开发进展和下一步规划
 
-> 更新时间：2026-06-04
-> 当前阶段：阶段 6 — KeyProvider + 中转站联通核心能力已完成，当前聚焦阶段 6 及之前生产上线完善
-> 当前状态：阶段 1 OpenAI-compatible `/v1/*` 透传中继与健康检查已完成；阶段 2 弱扫描 MVP 已完成；阶段 3 归档 + 审计已完成；阶段 4 管理员认证 + 最小后台框架已完成；阶段 5 APIKey 管理已完成；阶段 6 已完成 KeyProvider 抽象、`passthrough` / `static` / `oneapi_nanfu_yxai` Provider、后台 Provider 创建、完整 Key 按需 reveal/复制、Provider-aware 吊销、`.env` 配置、既有 yxai Key JSON 导入脚本和 16 条现有中转站 Key 导入。阶段 7 及之后的开发暂不进行，后续只保留规划记录；当前所有开发与验证优先级统一收敛到阶段 6 及之前的生产上线稳定性。APIKey 的模型权限、token 额度、资源能力权限统一由中转站作为权威系统管理，SafetyHub 只做安全治理和上游 Key 映射。
+> 更新时间：2026-06-05
+> 当前阶段：阶段 6A — 单实例 Docker 生产稳定性与高并发治理
+> 当前状态：阶段 1 OpenAI-compatible `/v1/*` 透传中继与健康检查已完成；阶段 2 弱扫描 MVP 已完成；阶段 3 归档 + 审计已完成；阶段 4 管理员认证 + 最小后台框架已完成；阶段 5 APIKey 管理已完成；阶段 6 已完成 KeyProvider 抽象、`passthrough` / `static` / `oneapi_nanfu_yxai` Provider、后台 Provider 创建、完整 Key 按需 reveal/复制、Provider-aware 吊销、`.env` 配置、既有 yxai Key JSON 导入脚本和历史 Key 导入。当前运行配置已从 SQLite 切换到 PostgreSQL，`api_keys` 已完成 SQLite 到 PostgreSQL 迁移并验证 `sqlite=23 postgres=23 OK`，`run_dev.sh` 启动后 `/health/ready` 返回数据库与规则检查通过。阶段 7 及之后的开发暂不进行，后续只保留规划记录；当前所有开发与验证优先级统一收敛到阶段 6A：在短期单实例 Docker 生产部署前提下，补齐 `/v1/*` 全局有界并发队列、生产启动方式、管理端保护、上游连接池复用、审计归档削峰和 PostgreSQL 运行稳定性验证；结合 100 名员工同时使用 OpenClaw/Hermes/批量标注 Agent 的峰值生产场景，生产目标至少支持容器总 `1000` in-flight + `2000` 排队，并允许通过 `.env` 或等价部署配置调整；流式与非流式统一纳入 `/v1/*` 队列，不单独拆分并发池。APIKey 的模型权限、token 额度、资源能力权限统一由中转站作为权威系统管理，SafetyHub 只做安全治理和上游 Key 映射。
 
 ---
 
 ## 一、实际代码状态
 
-本状态基于当前仓库代码检查与测试结果。当前代码已经具备 FastAPI 应用入口、健康检查、Request ID、OpenAI-compatible `/v1/*` 通用中继转发、Header 安全透传、单上游路由、Scanner 调度、关键词/正则扫描、block 拦截伪装回复、请求侧手机号脱敏改写转发、SSE 透传与完整流式归档、规则定时热加载、管理后台规则启停和手动热加载、管理 API 和静态页面 Basic Auth + IP 白名单、Chat 归档/审计写入、正式归档/审计分页筛选和详情 API、统计概览 API、管理员操作审计、最小静态后台、文生图元数据归档、文生图图片本体异步归档、图片资产状态 API、最近对话观测 API、SQLite 旧表缺列补齐、R1~R9 schema 预留和 timezone-aware UTC 时间字段。
+本状态基于当前仓库代码检查与测试结果。当前代码已经具备 FastAPI 应用入口、健康检查、Request ID、OpenAI-compatible `/v1/*` 通用中继转发、Header 安全透传、单上游路由、Scanner 调度、关键词/正则扫描、block 拦截伪装回复、请求侧手机号脱敏改写转发、SSE 透传与完整流式归档、规则定时热加载、管理后台规则启停和手动热加载、管理 API 和静态页面 Basic Auth + IP 白名单、Chat 归档/审计写入、正式归档/审计分页筛选和详情 API、统计概览 API、管理员操作审计、最小静态后台、文生图元数据归档、文生图图片本体异步归档、图片资产状态 API、最近对话观测 API、SQLite 旧表缺列补齐、PostgreSQL 运行配置、SQLite 到 PostgreSQL 迁移/验证脚本、R1~R9 schema 预留和 timezone-aware UTC 时间字段。
 
 阶段 5 已新增 `governance/api_keys.py`、`middleware/identity.py`、后台 APIKey CRUD 接口和 `admin/static/api_keys.html` 可操作页面。SafetyHub 当前支持管理员手动录入已有中转站 Key，默认以 K-Sync 模式保存；数据库保存哈希、前后缀、加密后的上游 Key 和加密后的 SafetyHub Key，不在列表接口默认返回 Key 明文。启用 APIKey 后，`/v1/*` 请求会按客户端 Authorization 查询 `api_keys`，校验本地记录是否存在、active/revoked/expired 状态是否有效，并用解密后的上游 Key 替换转发到中转站的 Authorization。模型权限、token 额度、速率限制和资源能力权限由中转站负责，SafetyHub 不做模型/能力 allowlist 拦截，相关字段已从当前 schema、后台表单和 API 响应中删除。若数据库中还没有任何 APIKey，`/v1/*` 会保持阶段 1-4 的过渡透传行为，便于上线迁移。
 
-阶段 6 已新增 `governance/key_provider.py`、`governance/providers/{passthrough,static_key,oneapi_nanfu_yxai}.py`，`main.py` lifespan 会根据 `KEY_PROVIDER_TYPE` 实例化 Provider 并注入 `ApiKeyService`。后台创建表单支持“手动录入中转站 Key”和“由 KeyProvider 创建”，Provider 创建默认 K-Sync，创建成功后返回完整 SafetyHub Key 供管理员复制；列表默认只展示前后缀，管理员可按需点击 reveal/复制完整 Key并写入操作审计。`oneapi_nanfu_yxai` 已对接 yxai 中转站登录、创建、获取完整 Key、删除和分页列表接口，支持 `KEY_PROVIDER_BASE_URL`、`KEY_PROVIDER_USERNAME`、`KEY_PROVIDER_PASSWORD_ENV`、`KEY_PROVIDER_AUTH_VERSION`、默认 quota 和重试参数配置。`scripts/import_yxai_keys.py` 已支持从 `yxai_token_export.json` 幂等导入历史中转站 Key，当前本地数据库已导入 16 条 `oneapi_nanfu_yxai` K-Sync 记录。
+阶段 6 已新增 `governance/key_provider.py`、`governance/providers/{passthrough,static_key,oneapi_nanfu_yxai}.py`，`main.py` lifespan 会根据 `KEY_PROVIDER_TYPE` 实例化 Provider 并注入 `ApiKeyService`。后台创建表单支持“手动录入中转站 Key”和“由 KeyProvider 创建”，Provider 创建默认 K-Sync，创建成功后返回完整 SafetyHub Key 供管理员复制；列表默认只展示前后缀，管理员可按需点击 reveal/复制完整 Key并写入操作审计。`oneapi_nanfu_yxai` 已对接 yxai 中转站登录、创建、获取完整 Key、删除和分页列表接口，支持 `KEY_PROVIDER_BASE_URL`、`KEY_PROVIDER_USERNAME`、`KEY_PROVIDER_PASSWORD_ENV`、`KEY_PROVIDER_AUTH_VERSION`、默认 quota 和重试参数配置。`scripts/import_yxai_keys.py` 已支持从 `yxai_token_export.json` 幂等导入历史中转站 Key；当前 PostgreSQL `api_keys` 表已有 23 条 active 记录，`upstream_key_encrypted` 与 `safetyhub_key_encrypted` 均存在。
 
 当前代码尚未具备路径 C 自动续约迁移结果页、Provider 切换演练页、替换后首次请求失败自动回滚、图片资产后台预览/下载页面、图片资产存储配额和清理任务、告警通知、文件安全、审批运行链路和中转站配额/速率只读观测能力。
 
@@ -27,7 +27,8 @@
 | 阶段 3 | 归档 + 审计 | ✅ 已完成 | Chat 非流式/流式归档、block/desensitize 动作审计、文生图元数据归档、图片本体异步归档、图片资产状态 API、最近对话观测 API、SQLite 旧表缺列补齐、R1~R9 schema 预留和相关测试已完成 |
 | 阶段 4 | 管理员认证 + 最小后台 | ✅ 已完成 | Basic Auth + IP 白名单、表单登录、后台静态页面鉴权、归档/审计/统计 API、规则管理 API、管理员操作审计和最小静态后台已完成 |
 | 阶段 5 | APIKey 管理 | ✅ 已完成 | `middleware/identity.py`、`governance/api_keys.py`、K-Sync 创建、加密存储、APIKey 有效性校验、上游 Key 映射、后台 CRUD、单条替换和 CSV 批量替换上游 Key 已完成；模型/token/资源能力权限由中转站负责 |
-| 阶段 6 | KeyProvider + 中转站联通 | ✅ 核心能力已完成，生产上线完善中 | 已实现 Provider 抽象、`passthrough/static/oneapi_nanfu_yxai`、后台 Provider 创建、reveal/复制完整 Key、Provider-aware 吊销、`.env` 配置和 JSON 导入；当前优先补齐阶段 6 及之前的上线稳定性验证 |
+| 阶段 6 | KeyProvider + 中转站联通 | ✅ 核心能力已完成 | 已实现 Provider 抽象、`passthrough/static/oneapi_nanfu_yxai`、后台 Provider 创建、reveal/复制完整 Key、Provider-aware 吊销、`.env` 配置和 JSON 导入 |
+| 阶段 6A | 单实例 Docker 生产稳定性与高并发治理 | 🔄 当前生产上线范围 | 默认目标至少支持容器总 `1000` in-flight + `2000` 排队，支持 `.env` 或等价部署配置调整；流式与非流式统一进入 `/v1/*` 队列，不单独拆分并发池 |
 | 阶段 7 | 扫描升级 | ⏸️ 暂不开发 | 当前仅保留规划记录，不进入近期开发；生产上线前不扩展完整 PII、分级策略和误报回归体系，继续使用阶段 2 已验证的低干扰规则集 |
 | 阶段 8 | 可观测性 + 告警 | ⏸️ 暂不开发 | 当前仅保留规划记录，不进入近期开发；生产上线前不新增 Prometheus 指标、Webhook 告警、审计导出、图片资产后台预览/下载页面、存储配额和保留策略 |
 | 阶段 9 | 审批 + 安全策略 + 审批链 | ⏸️ 暂不开发 | 当前仅保留规划记录，不进入近期开发；生产上线前不启用审批运行链路、策略绑定运行逻辑和审批链路由 |
@@ -67,8 +68,8 @@
 
 ## 五、统一阶段口径
 
-- 当前阶段统一为：**阶段 6 — KeyProvider + 中转站联通核心能力已完成，聚焦阶段 6 及之前生产上线完善**。
-- 阶段 1 至阶段 6 核心能力统一判定为：**已完成**；接下来只补齐上线前验证、配置安全、运维检查和阶段 6 既有能力的稳定性问题。
+- 当前阶段统一为：**阶段 6A — 单实例 Docker 生产稳定性与高并发治理**。
+- 阶段 1 至阶段 6 核心能力统一判定为：**已完成**；接下来只补齐阶段 6A 的上线前验证、配置安全、运维检查和高并发稳定性问题。
 - 阶段 7 及之后统一判定为：**暂不开发**；相关内容仅作为长期规划保留，不进入当前生产上线范围，不作为上线阻塞项。
 - 阶段 5 默认模式为 **K-Sync**：管理员录入的中转站 Key 同时作为客户端 SafetyHub Key 和上游 Key。
 - 当管理员替换上游 Key 后，该记录自动进入 **K-Decoupled**：客户端 SafetyHub Key 不变，上游 Key 改为新中转站 Key。
@@ -79,15 +80,18 @@
 
 ## 六、下一步开发计划
 
-### 6.1 下一批次：阶段 6 及之前生产上线完善
+### 6.1 下一批次：阶段 6A 单实例生产稳定性与高并发治理
 
 | 优先级 | 任务 | 目标产出 |
 |--------|------|----------|
-| P0 | 上线前全量验证 | 复跑编译检查、全量测试、APIKey/KeyProvider 专项测试、真实上游连通验证，确保阶段 1~6 主链路稳定 |
-| P0 | 生产配置安全复核 | 确认 `SAFETYHUB_DATA_KEY`、管理员密码、上游配置、Provider 凭据、IP 白名单和日志脱敏满足生产要求 |
-| P0 | APIKey 迁移与回滚预案 | 复核 16 条历史 Key 导入结果、K-Sync/K-Decoupled 行为、单条/CSV 替换能力和手动回滚步骤 |
-| P1 | 阶段 6 既有能力稳定性完善 | 围绕 Provider 创建、reveal/复制、Provider-aware 吊销和上游异常降级补充验证与必要修复 |
-| P1 | 上线观测与运维检查 | 核对健康检查、归档/审计查询、最近对话观测、数据库备份、磁盘空间和服务重启策略 |
+| P0 | `/v1/*` 全局有界并发队列 | 对所有 `/v1/*` 请求设置最大在途数、最大排队数和排队超时；默认目标至少为容器总 `1000` in-flight + `2000` 排队，支持通过 `.env` 或等价配置调整；超过容量返回兼容错误，管理端和健康检查不进入该队列 |
+| P0 | 生产 Docker 启动方式收敛 | 去除 `--reload`；明确单实例 Docker 内 worker 数、总并发目标到每 worker 上限的折算规则、容器 CPU/内存/文件描述符要求 |
+| P0 | 管理端保护 | `/admin/*` 和 `/health/*` 不受 `/v1/*` 压测队列影响；`/admin/api/stats` 增加短缓存；归档/审计列表保持分页和默认轻量查询 |
+| P0 | 上游 HTTP 连接池复用 | 应用生命周期内复用上游 `AsyncClient`，配置最大连接数、keepalive、pool timeout、connect/read timeout，避免每请求创建 client |
+| P1 | 审计归档削峰 | Chat 审计和归档从主请求链路中解耦为有界后台队列；队列满时可降级为元数据/采样/截断保存，保证主链路不被写库拖垮 |
+| P1 | PostgreSQL 切库运行验证 | 当前 `.env` 已切换 PostgreSQL，APIKey 已完成迁移；继续补齐端口暴露、容器重启后连接稳定性、备份恢复和高并发写入保护验证 |
+| P1 | 上线前全量验证 | 复跑编译检查、全量测试、APIKey/KeyProvider 专项测试、真实上游连通验证和高并发阶梯压测，确保阶段 1~6A 主链路稳定 |
+| P1 | 生产配置安全复核 | 确认 `SAFETYHUB_DATA_KEY`、管理员密码、上游配置、Provider 凭据、IP 白名单、日志脱敏和高并发参数满足生产要求 |
 | P2 | 非阻塞体验优化 | 仅处理不改变阶段范围的后台提示、文案、错误提示和操作说明优化 |
 
 ### 6.2 暂停开发范围
@@ -147,9 +151,9 @@ NF-SafetyHub/
 |--------|------|----------|
 | APIKey / KeyProvider 专项测试 | `pytest tests/test_api_keys.py` | 通过，7 passed |
 | 全量单元测试 | `pytest` | 通过，69 passed |
-| 数据导入验证 | `python scripts/import_yxai_keys.py` + 数据库计数 | 已导入 16 条 `oneapi_nanfu_yxai` 记录，`safetyhub_key_encrypted` 均存在；重复执行为 update 幂等 |
+| APIKey 迁移验证 | `python scripts/verify_postgres_migration.py --tables api_keys` | SQLite 与 PostgreSQL 均为 23 条，`api_keys: sqlite=23 postgres=23 OK`；PostgreSQL 中 23 条记录均为 active，`upstream_key_encrypted` 与 `safetyhub_key_encrypted` 均存在 |
 | 测试覆盖范围 | `tests/` | admin_auth、admin_stage4、api_keys、health、keyword、regex、scanner、fake_response、relay、header_policy、upstream_router、rules_config、rules_reload、archive、audit、models、observations |
-| 代码结构检查 | 文件系统检查 | 阶段 5 APIKey 服务层、identity 中间件、后台接口、前端页面、SQLite 兼容已完成；阶段 6 Provider 抽象、`oneapi_nanfu_yxai`、reveal/复制、Provider-aware 吊销和导入脚本已补齐 |
+| 代码结构检查 | 文件系统检查 | 阶段 5 APIKey 服务层、identity 中间件、后台接口、前端页面、SQLite 兼容已完成；阶段 6 Provider 抽象、`oneapi_nanfu_yxai`、reveal/复制、Provider-aware 吊销和导入脚本已补齐；迁移/验证脚本支持 SQLite 到 PostgreSQL 切换验证 |
 
 ---
 
@@ -162,4 +166,6 @@ NF-SafetyHub/
 - Windows PowerShell 直接传中文 JSON 可能出现编码损坏，中文规则测试建议使用 UTF-8 请求体文件或 JSON Unicode 转义。
 - 当前 block 拦截不会请求上游，但会写入归档和审计；阶段 8 告警暂不开发，不作为本次生产上线阻塞项。
 - 当前 desensitize 只作用于 Chat Completions 请求侧 `messages` 文本字段；非 Chat 接口默认透明透传，响应内容原样透传。
-- 当前数据库表通过 `create_all` 和 SQLite 缺列补齐维持兼容，后续 schema 稳定后应评估引入 Alembic 或等效迁移机制。
+- 当前运行环境已切换 PostgreSQL，SQLite 旧库保留为迁移来源和回退参考；当前仅按上线要求迁移 APIKey，其它历史归档/审计表未迁移。
+- 当前 PostgreSQL 连接使用容器网络地址，容器重启后 IP 可能变化；后续应改为端口发布或统一 Compose 网络服务名，避免连接地址漂移。
+- 当前数据库表通过 `create_all`、SQLite 缺列补齐和迁移脚本维持兼容，后续 schema 稳定后应评估引入 Alembic 或等效迁移机制。

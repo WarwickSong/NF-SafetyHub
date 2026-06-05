@@ -6,7 +6,7 @@
 
 ## 一、项目目录结构
 
-当前代码结构如下；阶段 1~6 核心能力已落地，KeyProvider 抽象、Provider 实现、APIKey 管理、文生图图片资产归档和后台页面已进入当前结构。当前开发范围收敛到阶段 6 及之前的生产上线完善；阶段 7 及之后暂不开发，告警、图片资产治理增强、文件安全运行模块仅保留规划，不作为当前上线阻塞项。
+当前代码结构如下；阶段 1~6 核心能力已落地，KeyProvider 抽象、Provider 实现、APIKey 管理、文生图图片资产归档和后台页面已进入当前结构。当前开发范围收敛到阶段 6A 单实例 Docker 生产稳定性与高并发治理；阶段 7 及之后暂不开发，告警、图片资产治理增强、文件安全运行模块仅保留规划，不作为当前上线阻塞项。
 
 ```text
 NF-SafetyHub/
@@ -66,6 +66,7 @@ NF-SafetyHub/
 │       └── js/app.js
 ├── middleware/
 │   ├── auth.py
+│   ├── concurrency_limit.py      # 阶段 6A：/v1/* 全局有界并发队列
 │   └── identity.py
 ├── notify/
 │   └── __init__.py
@@ -178,6 +179,7 @@ app = FastAPI(
 )
 
 app.add_middleware(RequestIdMiddleware)
+app.add_middleware(V1ConcurrencyLimitMiddleware)
 app.add_middleware(ApiKeyIdentityMiddleware)
 app.add_middleware(AdminStaticAuthMiddleware)
 app.include_router(health_router, prefix="/health", tags=["health"])
@@ -192,7 +194,8 @@ app.mount("/admin", StaticFiles(directory=ADMIN_STATIC_DIR, html=True), name="ad
 - 启动配置校验、数据库初始化和连接释放
 - Scanner 初始化、定时规则热加载和注入
 - KeyProvider、ApiKeyService、上游路由初始化和注入
-- Request ID、APIKey 身份、后台静态页认证中间件注册
+- Request ID、`/v1/*` 并发闸门、APIKey 身份、后台静态页认证中间件注册
+- 应用生命周期内初始化并释放共享上游 HTTP client、归档/审计后台队列和统计缓存
 - 健康检查、管理 API、中继路由和后台静态页面挂载
 
 ---
@@ -213,6 +216,19 @@ class Settings(BaseSettings):
     upstream_url: str = ""                     # 默认中转站地址
     upstream_timeout_connect: int = 10         # 连接超时(秒)
     upstream_timeout_read: int = 120           # 读取超时(秒)
+    upstream_timeout_pool: int = 5             # 上游连接池等待超时(秒)
+    upstream_max_connections: int = 200        # 阶段 6A：每 worker 上游最大连接数
+    upstream_max_keepalive_connections: int = 100
+    upstream_keepalive_expiry: int = 30
+
+    v1_max_inflight: int = 250                 # 阶段 6A：每 worker /v1/* 最大在途请求数；4 worker 总目标 1000
+    v1_max_queue_size: int = 500               # 阶段 6A：每 worker /v1/* 最大排队数；4 worker 总目标 2000
+    v1_queue_timeout_seconds: float = 15       # 阶段 6A：排队等待超时，可通过 .env 调整
+    admin_stats_cache_seconds: int = 10        # 阶段 6A：后台统计短缓存
+    archive_queue_max_size: int = 5000         # 阶段 6A：归档后台队列上限
+    archive_batch_size: int = 50
+    archive_flush_interval_seconds: float = 1
+    archive_max_payload_bytes: int = 262144
 
     rules_config_path: Path = Path("engine/rules_config.yaml")
     rules_reload_interval: int = 5             # 规则热加载间隔(秒)
@@ -274,6 +290,7 @@ settings = Settings()
 - 启动时进行配置校验，生产环境缺少 `admin_password`、`upstream_url` 或弱密码时直接启动失败
 - 规则文件路径可配置，方便测试时使用不同的规则集
 - APIKey 与上游 Key 映射配置已在阶段 5/6 启用；模型权限、token 额度、速率限制和资源能力权限由中转站作为权威系统管理，SafetyHub 不做本地资源授权判定
+- 阶段 6A 新增的并发、队列、上游连接池、管理端缓存和归档削峰配置均按每 worker 生效；单实例 Docker 内启用多个 worker 时，需要按容器总目标折算每 worker 配置
 - KeyProvider 配置支持 `passthrough` / `static` / `oneapi_nanfu_yxai`，通用 `openai_compat` 和自动续约迁移留待后续增强
 - 数据保留、文件扫描、临时审批和告警默认可关闭，避免 MVP 阶段扩大实现范围
 
@@ -325,6 +342,13 @@ def extract_text_from_messages(messages: list) -> str:
 ```
 请求到达 /v1/{path}
   │
+  ├─ 阶段 6A：进入 /v1/* 全局有界并发队列
+  │     ├─ in_flight 未满 → 获取令牌并进入业务链路
+  │     ├─ in_flight 已满但 queue 未满 → 等待令牌
+  │     ├─ queue 满 → 返回 429/503
+  │     ├─ 等待超时 → 返回 429/503
+  │     └─ 流式与非流式统一使用该队列，不单独拆分流式并发池
+  │
   ├─ 判断接口类型
   │     ├─ Chat → 提取 messages 文本并进入 Scanner
   │     └─ 非 Chat（Embeddings/Completions/Responses/Images/未知接口/GET/DELETE/非 JSON/multipart）→ 阶段 1 默认透明透传
@@ -339,7 +363,7 @@ def extract_text_from_messages(messages: list) -> str:
   ├─ 非 Chat 请求
   │     └─ 默认透传到中转站；后续仅按明确业务需要增加脱敏或资产归档
   │
-  └─ 阶段 3 接入异步归档与审计
+  └─ 阶段 6A：审计/归档进入有界后台队列，队列满时按降级策略保存摘要或跳过完整内容
 ```
 
 ---
@@ -389,6 +413,8 @@ class SSEStreamProxy:
 
 - `proxy_stream`：纯透传模式，chunk 到达即转发，延迟最低
 - `collect_stream`：透传 + 收集模式，在透传的同时拼接完整响应，用于消息归档
+- 阶段 6A 默认使用应用生命周期内共享的 `httpx.AsyncClient`，不在每个请求中重复创建 client
+- 阶段 6A 流式归档必须受 `stream_archive_max_bytes` / `archive_max_payload_bytes` 约束，超过上限保存截断标记和原始字节数
 - 两种模式通过配置切换，默认使用 `collect_stream`（需要归档完整响应）
 
 ---
@@ -1238,9 +1264,35 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
 | 上游 Key 映射 | 读取并解密 `upstream_key_encrypted`，写入请求上下文供 Header Policy 替换上游 Authorization |
 | 权限边界 | 不做模型/token/资源权限 allowlist，相关 401/403/429 由中转站判定并透传 |
 
+#### 2.10.3 `middleware/concurrency_limit.py` — 阶段 6A `/v1/*` 并发闸门
+
+| 能力 | 设计要求 |
+|------|----------|
+| 作用范围 | 仅作用于 `/v1/*`，不包裹 `/admin/*`、`/admin/api/*`、`/health/*` 和静态资源 |
+| 最大在途 | 使用 `v1_max_inflight` 控制每 worker 同时进入业务链路的请求数，默认 4 worker 下每 worker 250、容器总目标 1000 |
+| 有界排队 | 使用 `v1_max_queue_size` 控制等待令牌的请求数，默认 4 worker 下每 worker 500、容器总目标 2000，队列满时立即返回 429 或 503 |
+| 排队超时 | 使用 `v1_queue_timeout_seconds` 控制等待令牌最长时间，超时后返回明确错误，不允许无限挂起 |
+| 流式口径 | 流式与非流式统一进入 `/v1/*` 并发闸门，不单独维护流式并发池 |
+| 可观测字段 | 在响应头或日志中保留 request_id、queue_wait_ms、inflight、queue_size、reject_reason 等摘要字段 |
+| 多 worker 口径 | 进程内计数不跨 worker；单实例 Docker 内多 worker 时必须按容器总目标折算每 worker 配置，并可通过 `.env` 或等价部署配置调整 |
+| 安全边界 | 不做按 Key 限流，不做上游熔断，不改变 APIKey 身份校验和中转站权限判定职责 |
+
 ---
 
-### 2.11 `governance/` — 身份、权限与审批预留
+### 2.11 `runtime/` — 阶段 6A 运行期资源
+
+阶段 6A 可新增轻量运行期模块，用于承载单实例生产高并发治理，避免把队列、连接池和缓存逻辑散落在 `relay.py`、`admin/router.py` 和 `storage/*` 中。
+
+| 模块 | 职责 | 当前阶段口径 |
+|------|------|--------------|
+| `runtime/upstream_client.py` | 创建和关闭共享 `httpx.AsyncClient`，封装连接池、keepalive、pool timeout 配置 | P0，实现后由 `proxy/relay.py` 复用 |
+| `runtime/archive_queue.py` | 维护归档/审计有界队列、批量消费、flush 和 shutdown drain | P1，先覆盖 Chat 归档和审计 |
+| `runtime/admin_cache.py` | 提供短 TTL 内存缓存，用于 `/admin/api/stats` 等高压查询保护 | P0，单 worker 内缓存即可 |
+| `runtime/metrics_snapshot.py` | 保存轻量运行快照，如 inflight、queue_size、reject_count、archive_queue_size | P1，先供日志和后台状态展示使用 |
+
+---
+
+### 2.12 `governance/` — 身份、权限与审批预留
 
 | 模块 | 职责 | v1.0 行为 | 后续启用方向 |
 |------|------|-----------|--------------|

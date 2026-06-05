@@ -14,6 +14,8 @@ if [ ! -f ".env" ]; then
   cp "${DEPLOY_DIR}/.env.local.example" .env
 fi
 
+export WATCHFILES_FORCE_POLLING="${WATCHFILES_FORCE_POLLING:-true}"
+
 .venv/bin/python -m uvicorn main:app \
   --reload \
   --reload-dir admin \

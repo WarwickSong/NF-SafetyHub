@@ -1,7 +1,7 @@
 # LLM-SafetyHub 测试验证指导
 
 > 本文档定义 SafetyHub 在 Windows、Linux、Docker 和真实上游联调场景下的测试方法、注意事项和验收标准。  
-> 当前重点覆盖阶段 1 透传中继 + 健康检查、阶段 2 检测/拦截/请求侧手机号脱敏/伪装回复/规则启停/规则热加载链路、阶段 3 Chat 非流式/流式归档、文生图元数据归档、图片本体异步归档、图片资产状态 API、审计写入、最近对话观测 API、R1~R9 schema 预留、阶段 4 管理后台、阶段 5 APIKey 管理、K-Sync 默认、加密存储、APIKey 有效性校验、单条/CSV 批量替换上游 Key，以及阶段 6 KeyProvider 抽象、`passthrough` / `static` / `oneapi_nanfu_yxai` Provider、Provider 创建、reveal/复制、Provider-aware 吊销和历史 Key JSON 导入。模型权限、token 额度和资源能力权限由中转站验证。阶段 7 及之后暂不开发；当前测试重点收敛到阶段 6 及之前的生产上线验证，自动续约迁移、Provider 切换演练、审计告警、图片资产预览下载页面和存储治理仅保留为长期规划。
+> 当前重点覆盖阶段 1 透传中继 + 健康检查、阶段 2 检测/拦截/请求侧手机号脱敏/伪装回复/规则启停/规则热加载链路、阶段 3 Chat 非流式/流式归档、文生图元数据归档、图片本体异步归档、图片资产状态 API、审计写入、最近对话观测 API、R1~R9 schema 预留、阶段 4 管理后台、阶段 5 APIKey 管理、K-Sync 默认、加密存储、APIKey 有效性校验、单条/CSV 批量替换上游 Key，以及阶段 6 KeyProvider 抽象、`passthrough` / `static` / `oneapi_nanfu_yxai` Provider、Provider 创建、reveal/复制、Provider-aware 吊销和历史 Key JSON 导入。模型权限、token 额度和资源能力权限由中转站验证。阶段 7 及之后暂不开发；当前测试重点收敛到阶段 6A 单实例 Docker 生产稳定性与高并发治理，自动续约迁移、Provider 切换演练、审计告警、图片资产预览下载页面和存储治理仅保留为长期规划。
 
 ---
 
@@ -151,11 +151,37 @@ UPSTREAM_URL=https://yxai-api.nanfu.com
 ADMIN_PASSWORD=至少12位强密码
 ```
 
+阶段 6A 单实例生产高并发治理建议补充，默认按 100 名员工同时使用 OpenClaw/Hermes/批量标注 Agent 的峰值生产场景规划：
+
+```text
+UVICORN_WORKERS=4
+V1_MAX_INFLIGHT=250
+V1_MAX_QUEUE_SIZE=500
+V1_QUEUE_TIMEOUT_SECONDS=15
+UPSTREAM_MAX_CONNECTIONS=200
+UPSTREAM_MAX_KEEPALIVE_CONNECTIONS=100
+UPSTREAM_TIMEOUT_POOL=5
+ADMIN_STATS_CACHE_SECONDS=10
+ARCHIVE_QUEUE_MAX_SIZE=5000
+ARCHIVE_BATCH_SIZE=50
+ARCHIVE_FLUSH_INTERVAL_SECONDS=1
+ARCHIVE_MAX_PAYLOAD_BYTES=262144
+```
+
+上述示例表示单实例 Docker 内 4 worker，每 worker 最多 250 个 `/v1/*` 在途请求，容器总目标至少 1000 个在途请求；每 worker 最多 500 个排队请求，容器总目标至少 2000 个排队请求。若 worker 数变化，必须同步折算每 worker 参数；这些参数必须支持通过 `.env` 或等价部署配置修改。流式与非流式统一进入 `/v1/*` 队列，不单独拆分流式并发池。
+
 ### 5.2 启动
 
 ```bash
 docker compose up --build -d
 ```
+
+生产模式要求：
+
+- Docker 启动命令不得包含 `--reload`。
+- `/admin/*`、`/admin/api/*`、`/health/*` 不进入 `/v1/*` 并发队列。
+- 当前 APIKey 已完成 SQLite 到 PostgreSQL 迁移，运行 `.env` 已切换 PostgreSQL；上线验证需确认 `/health/ready` 中 `database=true`，并确认 `api_keys: sqlite=23 postgres=23 OK`。
+- 如后续短期回退 SQLite，应确认 WAL、busy timeout、归档截断和后台统计缓存策略已启用；高并发生产默认按 PostgreSQL 口径验证。
 
 ### 5.3 验证
 
@@ -165,11 +191,107 @@ curl http://127.0.0.1:8080/health/live
 curl http://127.0.0.1:8080/health/ready
 ```
 
+阶段 6A 追加验证：
+
+```bash
+curl -sS -o /dev/null -w 'live code=%{http_code} total=%{time_total}\n' http://127.0.0.1:8080/health/live
+curl -sS -o /dev/null -w 'ready code=%{http_code} total=%{time_total}\n' http://127.0.0.1:8080/health/ready
+curl -sS -o /dev/null -w 'admin code=%{http_code} total=%{time_total}\n' http://127.0.0.1:8080/admin/
+```
+
 ---
 
-## 六、检测引擎验证
+## 六、阶段 6A 高并发压测与生产稳定性验证
 
-### 6.1 规则数量与默认启用集验证
+### 6.1 压测原则
+
+| 原则 | 要求 |
+|------|------|
+| 阶梯加压 | 优先使用 ramp-up，从 50/100/200 逐步升到目标并发，至少覆盖 1000 in-flight + 2000 排队目标附近的压力，不直接从 1000 并发开始 |
+| 记录配置 | 每次记录 worker 数、每 worker 并发上限、队列大小、队列超时、容器总 in-flight/queue 目标、上游连接池、数据库类型和归档策略 |
+| 管理端伴随验证 | 压测期间持续验证 `/health/*` 和 `/admin/*` 是否可访问 |
+| 失败可解释 | 区分安全拦截、队列满、排队超时、上游错误、数据库写入降级和客户端超时 |
+| 单实例边界 | 不把水平扩展、按 Key 限流、上游熔断和流式单独并发池作为当前验收前提 |
+
+### 6.2 推荐压测命令
+
+```bash
+python /var/www/temp/test_llm_throughput.py --mode ramp-up --start 50 --max 3000 --step 100 --duration 30
+python /var/www/temp/test_llm_throughput.py --mode duration -c 3000 -d 120
+```
+
+执行顺序建议先 ramp-up，确认各级并发的 p95/p99、错误率和后台可用性，再执行固定 3000 并发持续 120 秒，用于覆盖默认 4 worker 下 1000 in-flight + 2000 排队的容量边界。
+
+### 6.3 并发闸门验收
+
+| 场景 | 预期 |
+|------|------|
+| 并发低于 `V1_MAX_INFLIGHT` | 请求直接进入业务链路，无排队或仅少量排队 |
+| 并发高于 `V1_MAX_INFLIGHT` 且队列未满 | 请求等待令牌，响应中可观测 queue_wait_ms 或日志中可见排队耗时 |
+| 队列满 | 新请求返回 429/503，不进入业务链路，不无限占用内存 |
+| 排队超时 | 请求返回 429/503，错误信息可区分 queue timeout |
+| 多 worker | 容器总在途约等于每 worker `V1_MAX_INFLIGHT` × worker 数 |
+
+### 6.4 管理端可用性验收
+
+压测期间并行执行：
+
+```bash
+for i in $(seq 1 30); do
+  date
+  curl -sS -o /dev/null -w 'live %{http_code} %{time_total}\n' http://127.0.0.1:8080/health/live
+  curl -sS -o /dev/null -w 'ready %{http_code} %{time_total}\n' http://127.0.0.1:8080/health/ready
+  curl -sS -o /dev/null -w 'admin %{http_code} %{time_total}\n' http://127.0.0.1:8080/admin/
+  sleep 2
+done
+```
+
+预期：
+
+- `/health/live` 快速返回。
+- `/health/ready` 不因 `/v1/*` 队列满而被拒绝。
+- `/admin/` 可返回登录页或后台页面，不被 `/v1/*` 并发闸门阻塞。
+- 已登录状态下 `/admin/api/stats` 返回短缓存结果或可接受延迟结果。
+
+### 6.5 上游连接池与归档削峰验收
+
+| 验收项 | 预期 |
+|--------|------|
+| 上游连接池 | 连接数受 `UPSTREAM_MAX_CONNECTIONS` 约束，不随请求总数无限增长 |
+| 连接池等待 | `UPSTREAM_TIMEOUT_POOL` 超时能返回明确错误，不无限等待 |
+| 归档队列 | 队列长度受 `ARCHIVE_QUEUE_MAX_SIZE` 约束 |
+| 归档降级 | 队列满、数据库慢或写入失败时，主请求链路仍能返回响应 |
+| 归档截断 | 超过 `ARCHIVE_MAX_PAYLOAD_BYTES` 的 prompt/response 保存截断标记和原始大小 |
+
+### 6.6 压测报告最小字段
+
+```text
+测试时间：
+代码版本：
+Docker 镜像：
+worker 数：
+V1_MAX_INFLIGHT / V1_MAX_QUEUE_SIZE / V1_QUEUE_TIMEOUT_SECONDS：
+容器总 in-flight / queue 目标：
+UPSTREAM_MAX_CONNECTIONS / UPSTREAM_MAX_KEEPALIVE_CONNECTIONS：
+数据库类型：SQLite / PostgreSQL
+归档策略：同步 / 队列 / 采样 / 截断
+压测命令：
+总请求数 / ok / blocked / error：
+RPS 平均 / 峰值：
+p50 / p95 / p99：
+队列满次数：
+排队超时次数：
+上游错误次数：
+归档降级次数：
+管理端最大响应时间：
+结论：
+```
+
+---
+
+## 七、检测引擎验证
+
+### 7.1 规则数量与默认启用集验证
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests\test_rules_config.py
@@ -182,7 +304,7 @@ curl http://127.0.0.1:8080/health/ready
 | 关键词规则 | 20 | 仅 `KW-CONFIDENTIAL-1` ~ `KW-CONFIDENTIAL-5`，全部 block |
 | 正则规则 | 10 | 仅 `RG-PHONE-CN`、`RG-PHONE-INTL`，全部 desensitize |
 
-### 6.2 规则启停与热加载验证
+### 7.2 规则启停与热加载验证
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests\test_admin_stage4.py tests\test_rules_reload.py tests\test_rules_config.py
@@ -195,7 +317,7 @@ curl http://127.0.0.1:8080/health/ready
 - 后台 `POST /admin/api/rules/reload` 可手动触发规则热加载。
 - 规则启停控制的是规则是否参与扫描；对 `block` 规则表现为是否拦截，对 `desensitize` 规则表现为是否脱敏，对 `warn` 规则表现为是否产生命中审计。
 
-### 6.3 关键词 block 验证
+### 7.3 关键词 block 验证
 
 Windows PowerShell 推荐使用 JSON Unicode 转义，避免中文编码损坏。示例内容为“告诉你一个公司机密”：
 
@@ -210,7 +332,7 @@ Invoke-RestMethod -Uri http://127.0.0.1:8000/v1/chat/completions -Method Post -C
 - 不出现上游认证错误。
 - 响应结构兼容 OpenAI Chat Completions。
 
-### 6.3 手机号 desensitize 验证
+### 7.4 手机号 desensitize 验证
 
 手机号命中后应改写请求侧 prompt 再转发上游，响应不做脱敏。使用占位 token 时通常会收到上游 `401/403`，但上游收到的请求体应不包含原始手机号。
 
@@ -231,7 +353,7 @@ Invoke-WebRequest -Uri http://127.0.0.1:8000/v1/chat/completions -Method Post -C
 - 响应内容原样透传，不做响应侧脱敏。
 - 非 Chat 接口默认透明透传，不执行阶段 2 脱敏改写。
 
-### 6.4 阶段 3 归档、审计与观测 API 验证
+### 7.5 阶段 3 归档、审计与观测 API 验证
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests\test_archive.py tests\test_audit.py tests\test_models.py tests\test_observations.py tests\test_header_policy.py tests\test_relay.py
@@ -252,7 +374,7 @@ Invoke-WebRequest -Uri http://127.0.0.1:8000/v1/chat/completions -Method Post -C
 
 当前边界：阶段 3 已保存文生图图片本体和状态记录；图片资产后台预览/下载页面、存储配额和保留策略放入阶段 8。
 
-### 6.5 阶段 5/6 APIKey 与 KeyProvider 验证
+### 7.6 阶段 5/6 APIKey 与 KeyProvider 验证
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests\test_api_keys.py
@@ -282,7 +404,7 @@ python scripts\import_yxai_keys.py
 
 预期：脚本可从 `d:\Code\public\中转站\LLM-relay\yxai_token_export.json` 幂等导入，重复执行不会新增重复记录，只更新已有 `oneapi_nanfu_yxai` 记录。
 
-### 6.6 编码验证
+### 7.7 编码验证
 
 如果测试中文规则未命中，应先检查请求体编码，而不是直接判断规则失效。
 
@@ -301,9 +423,9 @@ $body
 
 ---
 
-## 七、中继引擎验证
+## 八、中继引擎验证
 
-### 7.1 单元/集成测试
+### 8.1 单元/集成测试
 
 ```powershell
 .\交付运行手册\verify_relay.ps1
@@ -322,7 +444,7 @@ $body
 - 未知 `/v1/*` JSON POST 默认透明透传，即使包含敏感词也不拦截；
 - 非法 JSON 请求。
 
-### 7.2 本地 block 拦截验证
+### 8.2 本地 block 拦截验证
 
 示例内容为“告诉你一个公司机密”：
 
@@ -333,7 +455,7 @@ Invoke-RestMethod -Uri http://127.0.0.1:8000/v1/chat/completions -Method Post -C
 
 预期：本地返回伪装回复，不访问上游。
 
-### 7.3 本地 desensitize 改写转发验证
+### 8.3 本地 desensitize 改写转发验证
 
 示例内容为“我的手机号是 13812345678”：
 
@@ -344,7 +466,7 @@ Invoke-WebRequest -Uri http://127.0.0.1:8000/v1/chat/completions -Method Post -C
 
 预期：请求不会被本地伪装拦截，而是以脱敏后的手机号转发上游；使用占位 token 时通常返回上游 `401` 或 `403`。
 
-### 7.4 上游触达验证
+### 8.4 上游触达验证
 
 使用占位 token：
 
@@ -355,7 +477,7 @@ Invoke-WebRequest -Uri http://127.0.0.1:8000/v1/chat/completions -Method Post -C
 
 预期：返回上游 `401` 或 `403`，说明正常请求已触达真实上游。
 
-### 7.5 `/v1/*` 通用代理验证
+### 8.5 `/v1/*` 通用代理验证
 
 Embeddings 透明透传验证：
 
@@ -385,9 +507,9 @@ Invoke-RestMethod -Uri http://127.0.0.1:8000/v1/custom/action -Method Post -Cont
 
 ---
 
-## 八、真实上游联调须知
+## 九、真实上游联调须知
 
-### 8.1 上游地址
+### 9.1 上游地址
 
 当前本地联调地址：
 
@@ -395,7 +517,7 @@ Invoke-RestMethod -Uri http://127.0.0.1:8000/v1/custom/action -Method Post -Cont
 UPSTREAM_URL=https://yxai-api.nanfu.com
 ```
 
-### 8.2 Token 安全
+### 9.2 Token 安全
 
 禁止：
 
@@ -412,7 +534,7 @@ UPSTREAM_URL=https://yxai-api.nanfu.com
 - 使用云平台 Secret Manager；
 - 测试完成后立即清理 shell 历史和临时变量。
 
-### 8.3 Windows 手动安全输入 token
+### 9.3 Windows 手动安全输入 token
 
 ```powershell
 $secureToken = Read-Host -AsSecureString "Input upstream token"
@@ -426,7 +548,7 @@ try {
 }
 ```
 
-### 8.4 Linux 手动安全输入 token
+### 9.4 Linux 手动安全输入 token
 
 ```bash
 read -rsp "Input upstream token: " TOKEN
@@ -440,7 +562,7 @@ unset TOKEN
 
 ---
 
-## 九、测试数据规范
+## 十、测试数据规范
 
 | 类型 | 推荐做法 | 禁止做法 |
 |------|----------|----------|
@@ -452,9 +574,9 @@ unset TOKEN
 
 ---
 
-## 十、故障排查
+## 十一、故障排查
 
-### 10.1 block 规则没有命中
+### 11.1 block 规则没有命中
 
 优先排查：
 
@@ -464,7 +586,7 @@ unset TOKEN
 4. 规则是否 `enabled: true`。
 5. 规则级别是否为 `block`。
 
-### 10.2 正常请求没有到上游
+### 11.2 正常请求没有到上游
 
 优先排查：
 
@@ -476,7 +598,7 @@ unset TOKEN
 
 当前实现中 `UPSTREAM_URL=https://yxai-api.nanfu.com` 会保留客户端请求路径自动拼接，例如 `/v1/chat/completions`、`/v1/embeddings`、`/v1/models`。
 
-### 10.3 上游返回 401/403
+### 11.3 上游返回 401/403
 
 说明请求大概率已触达上游，但 token 不合法或权限不足。检查：
 
@@ -485,7 +607,7 @@ unset TOKEN
 - token 是否具备目标模型权限；
 - Header 格式是否为 `Authorization: Bearer <token>`。
 
-### 10.4 PowerShell 显示乱码
+### 11.4 PowerShell 显示乱码
 
 如果响应中文显示乱码，但 JSON 结构正确，可能只是终端显示编码问题。可通过以下方式减少影响：
 
@@ -496,7 +618,7 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 
 ---
 
-## 十一、阶段性验收清单
+## 十二、阶段性验收清单
 
 ### 阶段 1 当前已完成能力
 
@@ -546,6 +668,18 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 - [x] APIKey 管理员操作审计测试。
 - [x] Key 明文不在后台 API 响应中返回测试。
 
+### 阶段 6A 生产稳定性当前待完成能力
+
+- [x] APIKey SQLite 到 PostgreSQL 迁移验证，`api_keys: sqlite=23 postgres=23 OK`。
+- [x] Linux 开发运行脚本连接 PostgreSQL 后 `/health/ready` 返回 `database=true` 和 `rules=true`。
+- [ ] Docker 生产启动不包含 `--reload`。
+- [ ] `/v1/*` 全局有界并发队列测试覆盖正常进入、排队、队列满和排队超时，默认 4 worker 下覆盖容器总 `1000` in-flight + `2000` 排队目标。
+- [ ] `/admin/*`、`/admin/api/*`、`/health/*` 不进入 `/v1/*` 队列。
+- [ ] `/admin/api/stats` 短缓存测试覆盖缓存命中和过期刷新。
+- [ ] 上游共享连接池测试覆盖配置传递和 client 生命周期关闭。
+- [ ] 归档/审计后台队列测试覆盖入队、批量消费、队列满降级和 shutdown drain。
+- [ ] 高并发压测报告记录 worker、队列、连接池、数据库、p95/p99、错误率和后台可用性。
+
 ### 阶段 8 长期规划测试
 
 阶段 8 暂不开发，以下测试仅作为长期规划保留，不纳入本次生产上线阻塞项。
@@ -555,7 +689,7 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 
 ---
 
-## 十二、每次开发完成后的固定动作
+## 十三、每次开发完成后的固定动作
 
 1. 运行编译检查。
 2. 运行全量测试。

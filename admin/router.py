@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, time, timedelta
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -41,12 +42,14 @@ from admin.schemas import (
     RuleMutationResponse,
     RulesReloadResponse,
     RuleToggleRequest,
+    RuntimeStatusResponse,
     TrendPoint,
 )
 from config import settings
 from governance.api_keys import ApiKeyCreate, ApiKeyService, key_prefix, key_suffix, parse_bulk_replace_csv
 from governance.key_provider import KeyProviderError
 from middleware.auth import clear_admin_session_cookie, require_admin_access, set_admin_session_cookie, validate_admin_login
+from middleware.concurrency_limit import get_v1_concurrency_snapshot
 from storage.admin_ops import AdminOperationPayload, AdminOperationQuery, AdminOperationReader, AdminOperationWriter
 from storage.archive import ArchiveQuery, ArchiveReader
 from storage.audit import AuditQuery, AuditReader
@@ -224,6 +227,13 @@ async def list_admin_operations(
 
 @router.get("/stats", response_model=AdminStatsResponse)
 async def admin_stats(request: Request):
+    cache = getattr(request.app.state, "admin_stats_cache", None)
+    if cache is not None:
+        return await cache.get_or_set(lambda: _load_admin_stats(request))
+    return await _load_admin_stats(request)
+
+
+async def _load_admin_stats(request: Request) -> AdminStatsResponse:
     archive_reader = _archive_reader(request)
     audit_reader = _audit_reader(request)
     now = datetime.now(UTC)
@@ -279,6 +289,30 @@ async def reload_rules(request: Request):
 @router.get("/health")
 async def admin_health():
     return {"status": "ok"}
+
+
+@router.get("/runtime", response_model=RuntimeStatusResponse)
+async def runtime_status(request: Request):
+    active_settings = getattr(request.app.state, "settings", settings)
+    return RuntimeStatusResponse(
+        worker_pid=os.getpid(),
+        configured_workers=active_settings.uvicorn_workers,
+        v1_concurrency=_v1_concurrency_snapshot(request),
+        archive_queue=_archive_queue_snapshot(request),
+        upstream={
+            "max_connections": active_settings.upstream_max_connections,
+            "max_keepalive_connections": active_settings.upstream_max_keepalive_connections,
+            "keepalive_expiry": active_settings.upstream_keepalive_expiry,
+            "timeout_connect": active_settings.upstream_timeout_connect,
+            "timeout_read": active_settings.upstream_timeout_read,
+            "timeout_pool": active_settings.upstream_timeout_pool,
+        },
+        admin={
+            "stats_cache_seconds": active_settings.admin_stats_cache_seconds,
+            "observations_default_limit": 5,
+            "observations_max_limit": 20,
+        },
+    )
 
 
 @router.get("/api-keys", response_model=ApiKeyListResponse)
@@ -430,6 +464,34 @@ def _admin_operation_writer(request: Request) -> AdminOperationWriter:
 
 def _api_key_service(request: Request) -> ApiKeyService:
     return getattr(request.app.state, "api_key_service", None) or ApiKeyService(_session_factory(request), key_provider=getattr(request.app.state, "key_provider", None))
+
+
+def _v1_concurrency_snapshot(request: Request) -> dict[str, Any]:
+    snapshot = get_v1_concurrency_snapshot()
+    if snapshot is not None:
+        return {**snapshot, "snapshot_scope": "worker"}
+    active_settings = getattr(request.app.state, "settings", settings)
+    return {
+        "max_inflight": active_settings.v1_max_inflight,
+        "max_queue_size": active_settings.v1_max_queue_size,
+        "queue_timeout_seconds": active_settings.v1_queue_timeout_seconds,
+        "inflight": None,
+        "queue_size": None,
+        "snapshot_scope": "configured",
+    }
+
+
+def _archive_queue_snapshot(request: Request) -> dict[str, Any]:
+    archive_queue = getattr(request.app.state, "archive_queue", None)
+    if archive_queue is None:
+        return {
+            "queue_size": None,
+            "max_size": settings.archive_queue_max_size,
+            "dropped": None,
+            "processed": None,
+            "snapshot_scope": "configured",
+        }
+    return {**archive_queue.snapshot(), "snapshot_scope": "worker"}
 
 
 def _session_factory(request: Request):

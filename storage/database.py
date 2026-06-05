@@ -6,13 +6,25 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 from config import settings
 from storage.models import Base
 
-engine: AsyncEngine = create_async_engine(settings.db_url, future=True)
+
+def _sqlite_connect_args() -> dict[str, int]:
+    if not settings.db_url.startswith("sqlite+aiosqlite:///"):
+        return {}
+    return {"timeout": 30}
+
+
+engine: AsyncEngine = create_async_engine(
+    settings.db_url,
+    future=True,
+    connect_args=_sqlite_connect_args(),
+)
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 
 async def init_db() -> None:
     _ensure_sqlite_parent_dir()
     async with engine.begin() as conn:
+        await _configure_sqlite(conn)
         await conn.run_sync(Base.metadata.create_all)
         await _ensure_sqlite_legacy_columns(conn)
 
@@ -75,6 +87,14 @@ SQLITE_LEGACY_COLUMNS = {
         "revoked_at": "DATETIME DEFAULT NULL",
     },
 }
+
+
+async def _configure_sqlite(conn) -> None:
+    if not settings.db_url.startswith("sqlite+aiosqlite:///"):
+        return
+    await conn.execute(text("PRAGMA journal_mode=WAL"))
+    await conn.execute(text("PRAGMA synchronous=NORMAL"))
+    await conn.execute(text("PRAGMA busy_timeout=30000"))
 
 
 async def _ensure_sqlite_legacy_columns(conn) -> None:

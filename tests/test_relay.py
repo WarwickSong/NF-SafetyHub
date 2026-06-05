@@ -376,6 +376,75 @@ def test_embeddings_request_relays_to_upstream_even_with_sensitive_text(relay_te
     assert "产品路线图" in captured["body"]
 
 
+def test_upstream_pool_timeout_returns_429_without_500(relay_test_client, monkeypatch):
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.PoolTimeout("pool exhausted", request=request)
+
+    transport = httpx.MockTransport(handler)
+    original_async_client = httpx.AsyncClient
+
+    def build_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", build_client)
+
+    response = relay_test_client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-test", "messages": [{"role": "user", "content": "你好"}]},
+    )
+
+    assert response.status_code == 429
+    assert response.json()["detail"] == "upstream connection pool exhausted"
+    assert response.json()["error_type"] == "PoolTimeout"
+
+
+def test_upstream_read_timeout_returns_504_without_500(relay_test_client, monkeypatch):
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("read timed out", request=request)
+
+    transport = httpx.MockTransport(handler)
+    original_async_client = httpx.AsyncClient
+
+    def build_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", build_client)
+
+    response = relay_test_client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-test", "messages": [{"role": "user", "content": "你好"}]},
+    )
+
+    assert response.status_code == 504
+    assert response.json()["detail"] == "upstream request timed out"
+    assert response.json()["error_type"] == "ReadTimeout"
+
+
+def test_upstream_connect_error_returns_502_without_500(relay_test_client, monkeypatch):
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connect failed", request=request)
+
+    transport = httpx.MockTransport(handler)
+    original_async_client = httpx.AsyncClient
+
+    def build_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", build_client)
+
+    response = relay_test_client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-test", "messages": [{"role": "user", "content": "你好"}]},
+    )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "upstream transport error"
+    assert response.json()["error_type"] == "ConnectError"
+
+
 def test_get_models_relays_with_query_string(relay_test_client, monkeypatch):
     captured = {}
 
@@ -453,6 +522,30 @@ def test_generic_json_post_relays_even_with_sensitive_text(relay_test_client, mo
     assert "产品路线图" in captured["body"]
 
 
+def test_chat_completions_stream_timeout_returns_sse_error_event(relay_test_client, monkeypatch):
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("read timed out", request=request)
+
+    transport = httpx.MockTransport(handler)
+    original_async_client = httpx.AsyncClient
+
+    def build_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", build_client)
+
+    response = relay_test_client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-test", "stream": True, "messages": [{"role": "user", "content": "你好"}]},
+    )
+
+    assert response.status_code == 200
+    assert "event: error" in response.text
+    assert "ReadTimeout" in response.text
+    assert "upstream request timed out" in response.text
+
+
 def test_chat_completions_stream_archives_complete_sse_response(relay_test_app, monkeypatch):
     archive_payloads = []
 
@@ -460,7 +553,7 @@ def test_chat_completions_stream_archives_complete_sse_response(relay_test_app, 
         async def write(self, payload):
             archive_payloads.append(payload)
 
-    async def handler(request: httpx.Request) -> httpx.Response:
+    async def handler(_request: httpx.Request) -> httpx.Response:
         stream_body = (
             'data: {"choices":[{"delta":{"content":"你"},"finish_reason":null}]}\\n\\n'
             'data: {"choices":[{"delta":{"content":"好"},"finish_reason":null}]}\\n\\n'
@@ -515,7 +608,7 @@ def test_images_generation_archives_metadata_and_schedules_image_body_archive(re
         async def write(self, payload):
             archive_payloads.append(payload)
 
-    async def handler(request: httpx.Request) -> httpx.Response:
+    async def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
             json={

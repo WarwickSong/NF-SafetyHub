@@ -47,33 +47,25 @@ class AuditWriter:
         self._session_factory = session_factory or get_session_factory()
 
     async def write_scan_result(self, payload: AuditPayload) -> list[AuditLog]:
-        results = _extract_results(payload.scan_result)
-        if not results:
+        logs = _logs_from_payload(payload)
+        if not logs:
             return []
-        full_text_hash = _hash_text(payload.scanned_text or _normalized_text(payload.scan_result))
         async with self._session_factory() as session:
-            logs = [
-                AuditLog(
-                    request_id=payload.request_id,
-                    user_id=payload.user_id,
-                    rule_id=result.rule_id,
-                    rule_name=result.rule_name,
-                    rule_level=result.level,
-                    scanner_type=result.scanner_type,
-                    matched_snippet=result.matched_text,
-                    full_text_hash=full_text_hash,
-                    action_taken=payload.action_taken,
-                )
-                for result in results
-                if result.hit
-            ]
-            if not logs:
-                return []
             session.add_all(logs)
             await session.commit()
             for log in logs:
                 await session.refresh(log)
             return logs
+
+    async def write_many(self, payloads: list[AuditPayload]) -> None:
+        logs = []
+        for payload in payloads:
+            logs.extend(_logs_from_payload(payload))
+        if not logs:
+            return
+        async with self._session_factory() as session:
+            session.add_all(logs)
+            await session.commit()
 
 
 class AuditReader:
@@ -115,6 +107,28 @@ async def count_audits_between(
 ) -> int:
     reader = AuditReader(session_factory)
     return await reader.count_between(start_time, end_time, rule_level)
+
+
+def _logs_from_payload(payload: AuditPayload) -> list[AuditLog]:
+    results = _extract_results(payload.scan_result)
+    if not results:
+        return []
+    full_text_hash = _hash_text(payload.scanned_text or _normalized_text(payload.scan_result))
+    return [
+        AuditLog(
+            request_id=payload.request_id,
+            user_id=payload.user_id,
+            rule_id=result.rule_id,
+            rule_name=result.rule_name,
+            rule_level=result.level,
+            scanner_type=result.scanner_type,
+            matched_snippet=result.matched_text,
+            full_text_hash=full_text_hash,
+            action_taken=payload.action_taken,
+        )
+        for result in results
+        if result.hit
+    ]
 
 
 def _audit_filters(query: AuditQuery) -> list[Any]:

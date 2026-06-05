@@ -1,5 +1,5 @@
 const SafetyHub = {
-  version: "0.4.4",
+  version: "0.4.5",
   async api(path, options = {}) {
     const response = await fetch(path, { headers: { Accept: "application/json", ...(options.headers || {}) }, ...options });
     if (!response.ok) {
@@ -70,13 +70,43 @@ function setupLogin() {
 }
 
 async function loadDashboard() {
+  await Promise.all([loadDashboardStats(), loadDashboardRuntime()]);
+}
+
+async function loadDashboardStats() {
   const stats = await SafetyHub.api("/admin/api/stats");
   setText("todayRequests", stats.today_requests);
   setText("todayHits", stats.today_hits);
   setText("todayBlocks", stats.today_blocks);
   setText("totalRequests", stats.total_requests);
   const trend = document.getElementById("trend");
-  trend.innerHTML = stats.recent_trend.map((item) => `<div class="trend-item"><span>${item.date}</span><strong>请求 ${item.requests}</strong><strong>命中 ${item.hits}</strong><strong>拦截 ${item.blocked}</strong></div>`).join("");
+  if (trend) trend.innerHTML = stats.recent_trend.map((item) => `<div class="trend-item"><span>${item.date}</span><strong>请求 ${item.requests}</strong><strong>命中 ${item.hits}</strong><strong>拦截 ${item.blocked}</strong></div>`).join("");
+}
+
+async function loadDashboardRuntime() {
+  try {
+    renderRuntimeStatus(await SafetyHub.api("/admin/api/runtime"));
+  } catch (error) {
+    renderRuntimeStatus(null, error);
+  }
+}
+
+function renderRuntimeStatus(runtime, error) {
+  const target = document.getElementById("runtimeStatus");
+  if (!target) return;
+  if (!runtime) {
+    target.innerHTML = `<div class="trend-item"><span>运行状态</span><strong>暂不可用</strong><strong>${error ? escapeHtml(error.message) : "请刷新重试"}</strong></div>`;
+    return;
+  }
+  const v1 = runtime.v1_concurrency || {};
+  const queue = runtime.archive_queue || {};
+  const upstream = runtime.upstream || {};
+  target.innerHTML = [
+    `<div class="trend-item"><span>Worker</span><strong>PID ${runtime.worker_pid}</strong><strong>配置 ${runtime.configured_workers}</strong></div>`,
+    `<div class="trend-item"><span>/v1 队列</span><strong>在途 ${SafetyHub.text(v1.inflight)}</strong><strong>排队 ${SafetyHub.text(v1.queue_size)}</strong><strong>上限 ${v1.max_inflight}/${v1.max_queue_size}</strong></div>`,
+    `<div class="trend-item"><span>归档队列</span><strong>待写 ${SafetyHub.text(queue.queue_size)}</strong><strong>丢弃 ${SafetyHub.text(queue.dropped)}</strong><strong>已处理 ${SafetyHub.text(queue.processed)}</strong></div>`,
+    `<div class="trend-item"><span>上游连接</span><strong>max ${upstream.max_connections}</strong><strong>keepalive ${upstream.max_keepalive_connections}</strong><strong>pool ${upstream.timeout_pool}s</strong></div>`
+  ].join("");
 }
 
 async function loadArchives() {
@@ -111,9 +141,16 @@ async function loadAudits() {
 }
 
 async function loadObservations() {
-  const payload = await SafetyHub.api("/admin/api/observations/recent?limit=20");
+  const payload = await SafetyHub.api("/admin/api/observations/recent?limit=5");
   const list = document.getElementById("observationsList");
-  list.innerHTML = payload.items.map((item) => `<article class="stack-item"><h3>${item.request_id}</h3><p>${item.model || "-"} · ${item.action_taken}</p><pre>${SafetyHub.json({ original: item.messages_original, desensitized: item.messages_desensitized, response: item.response })}</pre></article>`).join("");
+  list.innerHTML = payload.items.map((item) => `<article class="stack-item" data-id="${item.id}"><h3>${item.request_id}</h3><p>${item.model || "-"} · ${item.action_taken} · ${SafetyHub.time(item.created_at)}</p><button class="button small secondary" data-load-observation="${item.id}">加载完整内容</button><pre class="observation-detail">${SafetyHub.json({ id: item.id, request_id: item.request_id, action_taken: item.action_taken, matched_rule_ids: item.matched_rule_ids, latency_ms: item.latency_ms })}</pre></article>`).join("");
+  list.querySelectorAll("button[data-load-observation]").forEach((button) => button.addEventListener("click", async () => {
+    const detail = await SafetyHub.api(`/admin/api/archives/${button.dataset.loadObservation}`);
+    const article = button.closest("article");
+    const pre = article?.querySelector(".observation-detail");
+    if (pre) pre.textContent = SafetyHub.json({ original: detail.messages_original, desensitized: detail.messages_desensitized, response: detail.response });
+    button.remove();
+  }));
 }
 
 async function loadRules() {
@@ -538,6 +575,10 @@ async function loadPlaceholder() {
   const endpoint = document.body.dataset.endpoint;
   const payload = await SafetyHub.api(endpoint);
   document.getElementById("placeholderMessage").textContent = payload.message;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
 function setText(id, value) {

@@ -72,34 +72,18 @@ class ArchiveWriter:
 
     async def write(self, payload: ArchivePayload) -> MessageArchive:
         async with self._session_factory() as session:
-            archive = MessageArchive(
-                request_id=payload.request_id,
-                user_id=payload.user_id,
-                api_key_id=payload.api_key_id,
-                model=payload.model,
-                capability=payload.capability,
-                prompt=_serialize_json(payload.prompt_desensitized if payload.prompt_desensitized is not None else payload.prompt_original),
-                prompt_original=_serialize_json(payload.prompt_original),
-                prompt_desensitized=_serialize_json(payload.prompt_desensitized if payload.prompt_desensitized is not None else payload.prompt_original),
-                response=_serialize_json(payload.response),
-                is_stream=payload.is_stream,
-                is_blocked=payload.is_blocked,
-                is_desensitized=payload.is_desensitized,
-                action_taken=payload.action_taken,
-                blocked_rule_id=payload.blocked_rule_id,
-                matched_rule_ids=_serialize_json(payload.matched_rule_ids or []),
-                approval_id=payload.approval_id,
-                file_ids=_serialize_json(payload.file_ids or []),
-                image_metadata=_serialize_json(payload.image_metadata or {}),
-                prompt_tokens=payload.prompt_tokens,
-                completion_tokens=payload.completion_tokens,
-                completed_at=utc_now(),
-                latency_ms=payload.latency_ms,
-            )
+            archive = _archive_from_payload(payload)
             session.add(archive)
             await session.commit()
             await session.refresh(archive)
             return archive
+
+    async def write_many(self, payloads: list[ArchivePayload]) -> None:
+        if not payloads:
+            return
+        async with self._session_factory() as session:
+            session.add_all([_archive_from_payload(payload) for payload in payloads])
+            await session.commit()
 
 
 class ArchiveReader:
@@ -170,6 +154,33 @@ async def count_archives_between(
             )
         )
         return total or 0
+
+
+def _archive_from_payload(payload: ArchivePayload) -> MessageArchive:
+    return MessageArchive(
+        request_id=payload.request_id,
+        user_id=payload.user_id,
+        api_key_id=payload.api_key_id,
+        model=payload.model,
+        capability=payload.capability,
+        prompt=_serialize_json(payload.prompt_desensitized if payload.prompt_desensitized is not None else payload.prompt_original),
+        prompt_original=_serialize_json(payload.prompt_original),
+        prompt_desensitized=_serialize_json(payload.prompt_desensitized if payload.prompt_desensitized is not None else payload.prompt_original),
+        response=_serialize_json(payload.response),
+        is_stream=payload.is_stream,
+        is_blocked=payload.is_blocked,
+        is_desensitized=payload.is_desensitized,
+        action_taken=payload.action_taken,
+        blocked_rule_id=payload.blocked_rule_id,
+        matched_rule_ids=_serialize_json(payload.matched_rule_ids or []),
+        approval_id=payload.approval_id,
+        file_ids=_serialize_json(payload.file_ids or []),
+        image_metadata=_serialize_json(payload.image_metadata or {}),
+        prompt_tokens=payload.prompt_tokens,
+        completion_tokens=payload.completion_tokens,
+        completed_at=utc_now(),
+        latency_ms=payload.latency_ms,
+    )
 
 
 def _archive_filters(query: ArchiveQuery) -> list[Any]:
