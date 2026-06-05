@@ -11,7 +11,7 @@ if [ ! -x ".venv/bin/python" ]; then
 fi
 
 if [ ! -f ".env" ]; then
-  cp "${DEPLOY_DIR}/.env.local.example" .env
+  cp "${DEPLOY_DIR}/.env.current.example" .env
 fi
 
 export WATCHFILES_FORCE_POLLING="${WATCHFILES_FORCE_POLLING:-true}"

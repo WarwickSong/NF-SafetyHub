@@ -8,9 +8,8 @@ APIKEYS_SQL="${1:-}"
 cd "${PROJECT_ROOT}"
 
 if [ ! -f ".env" ]; then
-  cp "${DEPLOY_DIR}/.env.production.example" .env
-  echo "created .env from production example; edit .env and rerun this script" >&2
-  exit 2
+  echo ".env is required" >&2
+  exit 1
 fi
 
 set -a
@@ -23,19 +22,18 @@ POSTGRES_DATA_DIR="${SAFETYHUB_POSTGRES_DATA_DIR:-${DATA_ROOT}/postgres}"
 
 mkdir -p "${APP_DATA_DIR}" "${POSTGRES_DATA_DIR}"
 
-if grep -q "replace-with-" .env; then
-  echo "replace placeholder values in .env before deployment" >&2
-  grep -n "replace-with-" .env >&2 || true
-  exit 2
-fi
-
 if ! command -v docker >/dev/null 2>&1; then
   echo "docker is required" >&2
   exit 1
 fi
 
-docker compose up --build -d postgres
-docker compose up --build -d safetyhub nginx
+if [ "${SAFETYHUB_SKIP_BUILD:-false}" = "true" ]; then
+  docker compose up -d postgres
+  docker compose up --no-build -d safetyhub nginx
+else
+  docker compose up --build -d postgres
+  docker compose up --build -d safetyhub nginx
+fi
 
 if [ -n "${APIKEYS_SQL}" ]; then
   if [ ! -f "${APIKEYS_SQL}" ]; then

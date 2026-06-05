@@ -16,6 +16,7 @@ services:
     restart: unless-stopped
 
   safetyhub:
+    image: ${SAFETYHUB_IMAGE:-nf-safetyhub-safetyhub:latest}
     build: .
     container_name: safetyhub-app
     env_file:
