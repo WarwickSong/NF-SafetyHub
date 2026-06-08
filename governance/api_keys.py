@@ -7,7 +7,6 @@ import base64
 import csv
 import hashlib
 import io
-import os
 import secrets
 import uuid
 from typing import Any
@@ -75,7 +74,7 @@ class BulkReplaceResult:
 
 class ApiKeyCrypto:
     def __init__(self, data_key: str | None = None):
-        self._data_key = data_key or os.getenv(settings.data_encryption_key_env) or _development_data_key()
+        self._data_key = data_key or settings.get_secret(settings.data_encryption_key_env) or _development_data_key()
         self._fernet = Fernet(_fernet_key(self._data_key))
 
     def encrypt(self, value: str) -> str:
