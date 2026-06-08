@@ -101,12 +101,30 @@ function renderRuntimeStatus(runtime, error) {
   const v1 = runtime.v1_concurrency || {};
   const queue = runtime.archive_queue || {};
   const upstream = runtime.upstream || {};
+  const diskItems = (runtime.disk_space || []).map(renderDiskSpaceItem);
   target.innerHTML = [
     `<div class="trend-item"><span>Worker</span><strong>PID ${runtime.worker_pid}</strong><strong>配置 ${runtime.configured_workers}</strong></div>`,
     `<div class="trend-item"><span>/v1 队列</span><strong>在途 ${SafetyHub.text(v1.inflight)}</strong><strong>排队 ${SafetyHub.text(v1.queue_size)}</strong><strong>上限 ${v1.max_inflight}/${v1.max_queue_size}</strong></div>`,
     `<div class="trend-item"><span>归档队列</span><strong>待写 ${SafetyHub.text(queue.queue_size)}</strong><strong>丢弃 ${SafetyHub.text(queue.dropped)}</strong><strong>已处理 ${SafetyHub.text(queue.processed)}</strong></div>`,
-    `<div class="trend-item"><span>上游连接</span><strong>max ${upstream.max_connections}</strong><strong>keepalive ${upstream.max_keepalive_connections}</strong><strong>pool ${upstream.timeout_pool}s</strong></div>`
+    `<div class="trend-item"><span>上游连接</span><strong>max ${upstream.max_connections}</strong><strong>keepalive ${upstream.max_keepalive_connections}</strong><strong>pool ${upstream.timeout_pool}s</strong></div>`,
+    ...diskItems
   ].join("");
+}
+
+function renderDiskSpaceItem(item) {
+  if (!item.available) {
+    return `<div class="trend-item"><span>${escapeHtml(item.name)}</span><strong>不可用</strong><strong>${escapeHtml(item.path)}</strong><strong>${escapeHtml(item.error)}</strong></div>`;
+  }
+  return `<div class="trend-item"><span>${escapeHtml(item.name)}</span><strong>已用 ${formatBytes(item.used_bytes)} / ${formatBytes(item.total_bytes)}</strong><strong>剩余 ${formatBytes(item.free_bytes)}</strong><strong>${Number(item.used_percent || 0).toFixed(2)}%</strong><small>${escapeHtml(item.path)}</small></div>`;
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (!Number.isFinite(value) || value <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
+  const exponent = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1);
+  const size = value / Math.pow(1024, exponent);
+  return `${size.toFixed(size >= 10 || exponent === 0 ? 0 : 1)} ${units[exponent]}`;
 }
 
 async function loadArchives() {

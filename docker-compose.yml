@@ -29,6 +29,7 @@ services:
     volumes:
       - ${SAFETYHUB_DATA_DIR:-./data/app}:/app/data
       - ${SAFETYHUB_RULES_CONFIG:-./engine/rules_config.yaml}:/app/engine/rules_config.yaml
+      - ${SYSTEM_DISK_MONITOR_PATH:-/}:${SYSTEM_DISK_MONITOR_CONTAINER_PATH:-/mnt/system-disk}:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready')"]

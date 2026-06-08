@@ -112,6 +112,18 @@ class AdminStatsResponse(BaseModel):
     recent_trend: list[TrendPoint]
 
 
+class DiskSpaceItem(BaseModel):
+    key: str
+    name: str
+    path: str
+    total_bytes: int = 0
+    used_bytes: int = 0
+    free_bytes: int = 0
+    used_percent: float = 0
+    available: bool = True
+    error: str = ""
+
+
 class RuntimeStatusResponse(BaseModel):
     worker_pid: int
     configured_workers: int
@@ -119,6 +131,7 @@ class RuntimeStatusResponse(BaseModel):
     archive_queue: dict[str, Any]
     upstream: dict[str, Any]
     admin: dict[str, Any]
+    disk_space: list[DiskSpaceItem]
 
 
 class ObservationItem(ArchiveDetail):

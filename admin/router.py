@@ -2,6 +2,7 @@ from datetime import UTC, datetime, time, timedelta
 import json
 import os
 from pathlib import Path
+import shutil
 from typing import Any
 
 import yaml
@@ -312,6 +313,7 @@ async def runtime_status(request: Request):
             "observations_default_limit": 5,
             "observations_max_limit": 20,
         },
+        disk_space=_disk_space_snapshot(active_settings),
     )
 
 
@@ -492,6 +494,46 @@ def _archive_queue_snapshot(request: Request) -> dict[str, Any]:
             "snapshot_scope": "configured",
         }
     return {**archive_queue.snapshot(), "snapshot_scope": "worker"}
+
+
+def _disk_space_snapshot(active_settings) -> list[dict[str, Any]]:
+    items = []
+    seen_paths = set()
+    for key, name, host_path, container_path in (
+        ("system", "系统盘", active_settings.system_disk_monitor_path, active_settings.system_disk_monitor_container_path),
+        ("data", "数据盘", active_settings.data_disk_monitor_path, active_settings.data_disk_monitor_path),
+    ):
+        normalized_container_path = str(Path(container_path).expanduser())
+        if normalized_container_path in seen_paths:
+            continue
+        seen_paths.add(normalized_container_path)
+        items.append(_disk_space_item(key, name, str(Path(host_path).expanduser()), normalized_container_path))
+    return items
+
+
+def _disk_space_item(key: str, name: str, host_path: str, container_path: str) -> dict[str, Any]:
+    try:
+        total, used, free = shutil.disk_usage(container_path)
+    except OSError as exc:
+        return {
+            "key": key,
+            "name": name,
+            "path": host_path,
+            "available": False,
+            "error": str(exc),
+        }
+    used_percent = round((used / total) * 100, 2) if total else 0
+    return {
+        "key": key,
+        "name": name,
+        "path": host_path,
+        "total_bytes": total,
+        "used_bytes": used,
+        "free_bytes": free,
+        "used_percent": used_percent,
+        "available": True,
+        "error": "",
+    }
 
 
 def _session_factory(request: Request):

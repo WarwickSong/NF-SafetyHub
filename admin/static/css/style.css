@@ -492,9 +492,16 @@ pre {
 }
 
 .trend-item {
-  display: grid;
-  grid-template-columns: 1fr repeat(3, auto);
-  gap: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.trend-item small {
+  flex-basis: 100%;
+  color: var(--muted);
+  overflow-wrap: anywhere;
 }
 
 .error,

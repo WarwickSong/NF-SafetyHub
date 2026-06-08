@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     db_url: str = "sqlite+aiosqlite:///./data/safetyhub.db"
     archive_retention_days: int = 180
     audit_retention_days: int = 365
+    system_disk_monitor_path: Path = Path("/")
+    system_disk_monitor_container_path: Path = Path("/mnt/system-disk")
+    data_disk_monitor_path: Path = Path("data")
     image_asset_dir: Path = Path("data/image_assets")
     image_asset_max_size_mb: int = 20
     image_asset_download_timeout_seconds: int = 10

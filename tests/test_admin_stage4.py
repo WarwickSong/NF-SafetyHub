@@ -87,6 +87,7 @@ async def test_admin_archives_audits_stats_and_operations_api():
         audits_response = client.get("/admin/api/audits?rule_level=block", auth=auth)
         audit_detail_response = client.get(f"/admin/api/audits/{logs[0].id}", auth=auth)
         stats_response = client.get("/admin/api/stats", auth=auth)
+        runtime_response = client.get("/admin/api/runtime", auth=auth)
         operations_response = client.get("/admin/api/admin-ops", auth=auth)
         rules_response = client.get("/admin/api/rules", auth=auth)
         api_keys_response = client.get("/admin/api/api-keys", auth=auth)
@@ -109,6 +110,9 @@ async def test_admin_archives_audits_stats_and_operations_api():
     assert stats_response.json()["total_requests"] == 1
     assert stats_response.json()["total_hits"] == 1
     assert stats_response.json()["total_blocks"] == 1
+    assert runtime_response.status_code == 200
+    assert {item["key"] for item in runtime_response.json()["disk_space"]} == {"system", "data"}
+    assert all("free_bytes" in item for item in runtime_response.json()["disk_space"])
     assert operations_response.status_code == 200
     assert {item["operation"] for item in operations_response.json()["items"]} == {"archive.view_detail", "audit.view_detail"}
     assert rules_response.status_code == 200
