@@ -83,9 +83,17 @@ bash 交付运行手册/deploy_intranet_docker.sh "${APIKEYS_SQL}"
 SH
 chmod +x "${BUNDLE_DIR}/install.sh" "${APP_DIR}/交付运行手册/deploy_intranet_docker.sh"
 
-tar -C "${OUTPUT_ROOT}" -czf "${OUTPUT_ROOT}/${BUNDLE_NAME}.tar.gz" "${BUNDLE_NAME}"
-sha256sum "${OUTPUT_ROOT}/${BUNDLE_NAME}.tar.gz" > "${OUTPUT_ROOT}/${BUNDLE_NAME}.tar.gz.sha256"
+if command -v pigz >/dev/null 2>&1; then
+  tar -C "${OUTPUT_ROOT}" -cf - "${BUNDLE_NAME}" | pigz > "${OUTPUT_ROOT}/${BUNDLE_NAME}.tar.gz"
+elif command -v zstd >/dev/null 2>&1; then
+  tar -C "${OUTPUT_ROOT}" -cf - "${BUNDLE_NAME}" | zstd -T0 -o "${OUTPUT_ROOT}/${BUNDLE_NAME}.tar.zst"
+  echo "note: compressed with zstd, output is .tar.zst (not .tar.gz)"
+else
+  tar -C "${OUTPUT_ROOT}" -czf "${OUTPUT_ROOT}/${BUNDLE_NAME}.tar.gz" "${BUNDLE_NAME}"
+fi
 
-echo "bundle dir: ${BUNDLE_DIR}"
-echo "bundle tar: ${OUTPUT_ROOT}/${BUNDLE_NAME}.tar.gz"
-echo "checksum: ${OUTPUT_ROOT}/${BUNDLE_NAME}.tar.gz.sha256"
+for f in "${OUTPUT_ROOT}/${BUNDLE_NAME}".tar.*; do
+  sha256sum "$f" > "${f}.sha256"
+  echo "bundle: $f"
+  echo "checksum: ${f}.sha256"
+done
