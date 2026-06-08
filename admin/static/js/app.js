@@ -1,5 +1,5 @@
 const SafetyHub = {
-  version: "0.4.5",
+  version: "0.4.6",
   async api(path, options = {}) {
     const response = await fetch(path, { headers: { Accept: "application/json", ...(options.headers || {}) }, ...options });
     if (!response.ok) {
