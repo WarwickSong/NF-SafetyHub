@@ -9,6 +9,7 @@ venv/
 logs/
 *.db
 *.sqlite
+*.tar
 *.tar.gz
 nginx/ssl/
 .DS_Store
