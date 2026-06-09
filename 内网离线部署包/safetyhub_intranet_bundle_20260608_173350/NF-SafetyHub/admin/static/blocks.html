@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>拦截审计 - SafetyHub</title>
+  <link rel="stylesheet" href="/admin/css/style.css">
+</head>
+<body data-page="audits">
+  <nav class="sidebar">
+    <div class="brand">SafetyHub</div>
+    <a href="/admin/index.html">仪表盘</a>
+    <a href="/admin/archives.html">消息归档</a>
+    <a class="active" href="/admin/blocks.html">拦截审计</a>
+    <a href="/admin/observations.html">上线观测</a>
+    <a href="/admin/rules.html">规则</a>
+    <a href="/admin/api_keys.html">APIKey</a>
+    <a href="/admin/approvals.html">审批</a>
+    <a href="/admin/settings.html">设置</a>
+  </nav>
+  <main class="content">
+    <header class="topbar"><div><h1>拦截与审计</h1><p>查看 block、desensitize、warn 等命中事件。</p></div><button class="button" data-refresh>刷新</button></header>
+    <section class="card filters">
+      <input id="filterRuleId" placeholder="规则 ID">
+      <select id="filterRuleLevel"><option value="">全部级别</option><option value="block">block</option><option value="desensitize">desensitize</option><option value="warn">warn</option></select>
+      <input id="filterScannerType" placeholder="scanner 类型">
+      <button class="button" id="applyAuditFilters">查询</button>
+    </section>
+    <section class="card"><div class="table-wrap"><table><thead><tr><th>ID</th><th>Request ID</th><th>规则</th><th>级别</th><th>动作</th><th>时间</th></tr></thead><tbody id="auditsTable"></tbody></table></div></section>
+    <section class="card"><h2>详情</h2><pre id="auditDetail">点击记录查看详情</pre></section>
+  </main>
+  <script src="/admin/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SafetyHub 管理后台</title>
+  <link rel="stylesheet" href="/admin/css/style.css">
+</head>
+<body data-page="dashboard">
+  <nav class="sidebar">
+    <div class="brand">SafetyHub</div>
+    <a class="active" href="/admin/index.html">仪表盘</a>
+    <a href="/admin/archives.html">消息归档</a>
+    <a href="/admin/blocks.html">拦截审计</a>
+    <a href="/admin/observations.html">上线观测</a>
+    <a href="/admin/rules.html">规则</a>
+    <a href="/admin/api_keys.html">APIKey</a>
+    <a href="/admin/approvals.html">审批</a>
+    <a href="/admin/settings.html">设置</a>
+  </nav>
+  <main class="content">
+    <header class="topbar">
+      <div>
+        <h1>管理仪表盘</h1>
+        <p>展示请求、命中、拦截、运行队列和磁盘空间概览。</p>
+      </div>
+      <button class="button" data-refresh>刷新</button>
+    </header>
+    <section class="metric-grid">
+      <article class="metric-card"><span>今日请求</span><strong id="todayRequests">-</strong></article>
+      <article class="metric-card"><span>今日命中</span><strong id="todayHits">-</strong></article>
+      <article class="metric-card"><span>今日拦截</span><strong id="todayBlocks">-</strong></article>
+      <article class="metric-card"><span>累计请求</span><strong id="totalRequests">-</strong></article>
+    </section>
+    <section class="card">
+      <h2>运行状态</h2>
+      <div id="runtimeStatus" class="trend-list">正在加载运行状态...</div>
+    </section>
+    <section class="card">
+      <h2>近 7 日趋势</h2>
+      <div id="trend" class="trend-list"></div>
+    </section>
+  </main>
+  <script src="/admin/js/app.js?v=0.4.6"></script>
+</body>
+</html>
