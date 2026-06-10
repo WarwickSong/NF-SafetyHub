@@ -1,0 +1,5 @@
+docker_version=27.3.1
+docker_arch=x86_64
+compose_version=v2.29.7
+compose_arch=x86_64
+prepared_at=2026-06-10T07:15:43Z

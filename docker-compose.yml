@@ -43,7 +43,7 @@ services:
     depends_on:
       - safetyhub
     ports:
-      - "${SAFETYHUB_HTTP_PORT:-8080}:80"
+      - "${SAFETYHUB_HTTP_PORT:-80}:80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     restart: unless-stopped

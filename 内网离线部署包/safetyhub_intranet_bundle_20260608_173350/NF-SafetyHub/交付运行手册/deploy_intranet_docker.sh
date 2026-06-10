@@ -35,24 +35,50 @@ else
   docker compose up --build -d safetyhub nginx
 fi
 
+wait_for_table() {
+  table_name="$1"
+  for _ in $(seq 1 60); do
+    if docker compose exec -T postgres psql -qAt -U "${POSTGRES_USER:-safetyhub}" -d "${POSTGRES_DB:-safetyhub}" \
+      -c "SELECT to_regclass('public.${table_name}') IS NOT NULL;" | grep -qx 't'; then
+      return 0
+    fi
+    sleep 2
+  done
+  echo "database table not ready: ${table_name}" >&2
+  return 1
+}
+
 if [ -n "${APIKEYS_SQL}" ]; then
   if [ ! -f "${APIKEYS_SQL}" ]; then
     echo "api keys sql file not found: ${APIKEYS_SQL}" >&2
     exit 1
   fi
+  echo "initializing database schema before importing api keys..."
+  docker compose exec -T safetyhub python scripts/init_db.py
+  wait_for_table api_keys
+
   {
     cat <<'SQL'
 BEGIN;
-TRUNCATE TABLE
-  admin_operations,
-  approval_requests,
-  approval_chains,
-  audit_logs,
-  image_assets,
-  message_archives,
-  security_policies
-RESTART IDENTITY CASCADE;
-TRUNCATE TABLE api_keys RESTART IDENTITY CASCADE;
+DO $$
+DECLARE
+  table_name text;
+BEGIN
+  FOREACH table_name IN ARRAY ARRAY[
+    'admin_operations',
+    'approval_requests',
+    'approval_chains',
+    'audit_logs',
+    'image_assets',
+    'message_archives',
+    'security_policies',
+    'api_keys'
+  ] LOOP
+    IF to_regclass('public.' || table_name) IS NOT NULL THEN
+      EXECUTE format('TRUNCATE TABLE %I RESTART IDENTITY CASCADE', table_name);
+    END IF;
+  END LOOP;
+END $$;
 SQL
     cat "${APIKEYS_SQL}"
     echo "COMMIT;"
@@ -60,6 +86,7 @@ SQL
 fi
 
 docker compose ps
-curl -fsS "http://127.0.0.1:${SAFETYHUB_HTTP_PORT:-8080}/health/ready" || true
+curl -fsS "http://127.0.0.1:${SAFETYHUB_HTTP_PORT:-80}/health/ready" || true
 echo
-echo "SafetyHub admin: http://127.0.0.1:${SAFETYHUB_HTTP_PORT:-8080}/admin/"
+echo "SafetyHub backend: http://127.0.0.1:${SAFETYHUB_HTTP_PORT:-80}/admin/"
+echo "SafetyHub public:  https://${SAFETYHUB_DOMAIN:-llm-safetyhub.nanfu.com}/admin/"
