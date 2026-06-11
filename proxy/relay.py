@@ -9,6 +9,7 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from starlette.requests import ClientDisconnect
 
 from config import settings
 from engine.models import AggregatedScanResult
@@ -550,7 +551,10 @@ async def _safe_write_audit(writer: AuditWriter, payload: AuditPayload) -> None:
 async def _read_request_body(request: Request, path: str) -> tuple[Any, bytes]:
     if request.method not in JSON_BODY_METHODS:
         return None, b""
-    raw_body = await request.body()
+    try:
+        raw_body = await request.body()
+    except ClientDisconnect as exc:
+        raise HTTPException(status_code=499, detail="client disconnected while sending request body") from exc
     if not raw_body:
         return None, raw_body
     content_type = request.headers.get("content-type", "")

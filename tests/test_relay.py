@@ -4,6 +4,7 @@ import json
 import httpx
 import pytest
 from fastapi import FastAPI
+from starlette.requests import ClientDisconnect
 from fastapi.testclient import TestClient
 
 from engine.rules_keyword import KeywordScanner
@@ -406,6 +407,18 @@ def test_chat_completions_rejects_invalid_json(relay_test_client):
     response = relay_test_client.post("/v1/chat/completions", content="not-json")
 
     assert response.status_code == 400
+
+
+def test_chat_completions_returns_499_when_client_disconnects(relay_test_client, monkeypatch):
+    async def raise_disconnect(_request):
+        raise ClientDisconnect()
+
+    monkeypatch.setattr("proxy.relay.Request.body", raise_disconnect)
+
+    response = relay_test_client.post("/v1/chat/completions", json={"model": "gpt-test", "messages": []})
+
+    assert response.status_code == 499
+    assert response.json()["detail"] == "client disconnected while sending request body"
 
 
 def test_extract_text_from_request_supports_common_llm_endpoints():
