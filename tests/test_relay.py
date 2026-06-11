@@ -616,6 +616,37 @@ def test_chat_completions_stream_timeout_returns_sse_error_event(relay_test_clie
     assert "upstream request timed out" in response.text
 
 
+def test_chat_completions_stream_requests_identity_encoding(relay_test_client, monkeypatch):
+    captured = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["accept"] = request.headers.get("accept")
+        captured["accept_encoding"] = request.headers.get("accept-encoding")
+        captured["cache_control"] = request.headers.get("cache-control")
+        return httpx.Response(200, content=b"data: [DONE]\\n\\n", headers={"content-type": "text/event-stream"})
+
+    transport = httpx.MockTransport(handler)
+    original_async_client = httpx.AsyncClient
+
+    def build_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", build_client)
+
+    response = relay_test_client.post(
+        "/v1/chat/completions",
+        headers={"Accept-Encoding": "gzip, deflate, br"},
+        json={"model": "gpt-test", "stream": True, "messages": [{"role": "user", "content": "你好"}]},
+    )
+
+    assert response.status_code == 200
+    assert response.text == "data: [DONE]\\n\\n"
+    assert captured["accept"] == "text/event-stream"
+    assert captured["accept_encoding"] == "identity"
+    assert captured["cache_control"] == "no-cache"
+
+
 def test_chat_completions_stream_archives_complete_sse_response(relay_test_app, monkeypatch):
     archive_payloads = []
 

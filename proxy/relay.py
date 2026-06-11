@@ -122,6 +122,8 @@ async def _relay_to_upstream(
     url = _append_query_string(route.build_url(path), request.url.query)
     upstream_api_key = identity.upstream_api_key if identity and identity.upstream_api_key else None
     headers = build_upstream_headers(request.headers, getattr(request.state, "request_id", None), upstream_api_key)
+    if is_stream:
+        headers = _with_stream_headers(headers)
     client = getattr(request.app.state, "upstream_client", None)
     client_owner = False
     if client is None:
@@ -180,6 +182,18 @@ async def _relay_to_upstream(
     finally:
         if client_owner:
             await client.aclose()
+
+
+def _override_header_case_insensitive(headers: dict[str, str], name: str, value: str) -> dict[str, str]:
+    updated_headers = {key: header_value for key, header_value in headers.items() if key.lower() != name.lower()}
+    updated_headers[name] = value
+    return updated_headers
+
+
+def _with_stream_headers(headers: dict[str, str]) -> dict[str, str]:
+    updated_headers = _override_header_case_insensitive(headers, "Accept", "text/event-stream")
+    updated_headers = _override_header_case_insensitive(updated_headers, "Accept-Encoding", "identity")
+    return _override_header_case_insensitive(updated_headers, "Cache-Control", "no-cache")
 
 
 def _select_relay_payload(
