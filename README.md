@@ -101,6 +101,22 @@ docker compose up --build
 curl http://localhost:8000/health/live
 ```
 
+### 离线部署包打包
+
+离线交付分两层打包：先生成 SafetyHub 应用与镜像 bundle，再生成包含 Docker、Docker Compose 和应用 bundle 的整体离线部署包。
+
+```bash
+# 1. 生成最新 SafetyHub 内网应用 bundle
+bash 交付运行手册/build_intranet_offline_bundle.sh
+
+# 2. 生成整体 Docker 离线部署包
+bash docker离线部署/scripts/prepare-offline-package.sh
+```
+
+最终交付文件会输出到 `docker离线部署/部署文件/`，包括 `docker-offline-deploy_*.tar.gz` 和对应的 `.sha256` 校验文件。
+
+注意：`prepare-offline-package.sh` 会同步 `内网离线部署包/` 下最新的 `safetyhub_intranet_bundle_*.tar.gz`，并校验关键部署文件是否与当前源码一致。如果修改过 `docker-compose.yml`、`nginx/nginx.conf` 或部署脚本，必须先重新执行 `build_intranet_offline_bundle.sh`，否则整体打包会提前失败，避免旧 bundle 被误打进离线包。
+
 ### 常用命令
 
 ```bash

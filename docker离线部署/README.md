@@ -91,46 +91,36 @@ tar -xzf docker-offline-deploy_<ts>.tar.gz
 cd docker离线部署
 ```
 
-## 步骤 3：准备 HTTPS 证书与公网网关转发
+## 步骤 3：准备公网网关 HTTPS 转发
 
-管理后台启用了 `Secure` Cookie，必须通过 HTTPS 访问，否则会出现登录后保存 APIKey 等
-请求被浏览器丢弃 Cookie 而 401，前端表现为“一直保存中、刷新后未保存成功”。
-本包提供两种生产部署模式，**任选其一**：
-
-### 模式 A：上游公网网关做 TLS 终止（推荐）
+管理后台启用了 `Secure` Cookie，浏览器必须通过 HTTPS 访问公网域名，
+但**业务服务器不处理 HTTPS 证书**。证书部署在上游公网网关/负载均衡，
+本包内 nginx 容器只监听 HTTP 80。
 
 ```text
 外网用户 -> https://llm-safetyhub.nanfu.com -> 公网网关/负载均衡（HTTPS 终止）
         -> http://内网节点:80 -> SafetyHub
 ```
 
-公网网关需要在反向代理时强制注入：
+公网网关需要在反向代理时保留 `Host`，并强制注入：
 
 ```text
 X-Forwarded-Proto: https
 ```
 
-容器内 uvicorn 已启用 `--proxy-headers`，会基于该头识别为 HTTPS 并设置 Secure Cookie。
-此模式下内网节点无需保存证书，nginx 80 端口照常工作（80 入口里 `/health/` 保留 HTTP，
-其余路径会跳转 https，由公网网关回写）。
+容器内 uvicorn 已启用 `--proxy-headers`，会基于该头识别公网请求为 HTTPS，
+从而让 Secure Cookie 在浏览器侧正常落地。
 
-### 模式 B：内网 nginx 自己做 TLS 终止
+运维侧建议配置：
 
-将证书放到内网节点上，由本包内的 nginx 容器直接监听 443：
+```text
+Frontend: https://llm-safetyhub.nanfu.com:443
+Backend:  http://<内网节点>:80
+Health:   GET http://<内网节点>/health/ready
+```
 
-1. 在内网节点准备证书目录（默认值见 `内网离线部署包/intranet.env` 的
-   `SAFETYHUB_TLS_CERT_DIR`，例如 `/home/safetyhub/certs`）：
-
-   ```text
-   safetyhub.crt   # 域名证书（包含中间证书链）
-   safetyhub.key   # 私钥，权限建议 600
-   ```
-
-2. 确认 `内网离线部署包/intranet.env` 中：
-   - `SAFETYHUB_HTTP_PORT=80`、`SAFETYHUB_HTTPS_PORT=443`
-   - `SAFETYHUB_TLS_CERT_DIR` 指向上述目录
-3. 业务域名解析到该内网节点 443，80 仅做 `301 → https://`。
-4. 浏览器最终访问：`https://<内网域名>/admin/`。
+> 注意：不要把后端配置成 `https://<内网节点>`，后端必须是 HTTP 80。
+> 本包不需要在业务服务器准备 `safetyhub.crt` / `safetyhub.key`。
 
 ## 步骤 4：执行一键安装
 
@@ -171,6 +161,88 @@ curl -I https://llm-safetyhub.nanfu.com/health/ready
 
 ```text
 https://llm-safetyhub.nanfu.com/admin/
+```
+
+## 升级 / 替换旧版本（迭代新版本时使用）
+
+当目标机器上已经跑过一版 SafetyHub（容器名形如 `safetyhub-nginx` /
+`safetyhub-app` / `safetyhub-postgres`），想换成新版本时，按以下顺序操作：
+
+### 1. 定位旧 compose 工作目录
+
+```bash
+docker inspect safetyhub-nginx \
+  --format '{{ index .Config.Labels "com.docker.compose.project.working_dir"}}'
+
+docker inspect safetyhub-nginx \
+  --format '{{ index .Config.Labels "com.docker.compose.project.config_files"}}'
+```
+
+如果忘了旧 compose 文件位置，也可以全盘搜：
+
+```bash
+find / -name 'docker-compose*.y*ml' 2>/dev/null
+```
+
+### 2. 停掉并删除旧容器
+
+进入上一步得到的目录执行：
+
+```bash
+cd <旧 compose 工作目录>
+docker compose down
+```
+
+如果 `docker compose down` 提示 `no configuration file provided: not found`，
+说明当前目录没有 compose 文件，按容器名直接停删即可：
+
+```bash
+docker stop safetyhub-nginx safetyhub-app safetyhub-postgres
+docker rm   safetyhub-nginx safetyhub-app safetyhub-postgres
+```
+
+> 注意：**不要**执行 `docker volume prune` / `rm -rf /var/lib/docker`，
+> 否则 postgres 数据会丢。如需保留旧数据，先确认数据卷：
+>
+> ```bash
+> docker volume ls | grep -i safetyhub
+> ```
+
+### 3. 确认端口已释放
+
+新栈只占用业务服务器的 80 端口，443 由上游网关/负载均衡处理：
+
+```bash
+docker ps
+ss -lntp | grep ':80 '
+```
+
+如果旧版本 `safetyhub-nginx` 一直 `Restarting`，并且日志出现：
+
+```text
+cannot load certificate "/etc/nginx/certs/safetyhub.crt"
+```
+
+说明旧包仍包含 443 证书配置。直接按上面的 `docker compose down` 或 `docker stop/rm`
+删除旧容器后，用新包重新部署即可；业务服务器不需要补证书。
+
+### 4. 部署新版本
+
+旧 docker 引擎可继续复用，跳过 docker 安装步骤：
+
+```bash
+cd <新版> docker离线部署
+sudo SKIP_DOCKER_INSTALL=true bash scripts/install.sh
+```
+
+如需同时升级 docker 引擎本身，先 `sudo bash scripts/uninstall.sh`，
+再正常 `sudo bash scripts/install.sh`。
+
+### 5. 验证
+
+```bash
+curl http://127.0.0.1/health/ready
+docker ps
 ```
 
 ## 卸载

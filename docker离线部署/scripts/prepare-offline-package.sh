@@ -58,8 +58,36 @@ require_cmd() {
 require_cmd curl
 require_cmd tar
 require_cmd sha256sum
+require_cmd cmp
 
 mkdir -p "${DOCKER_DIR}" "${APP_BUNDLE_DIR}"
+
+verify_bundle_matches_source() {
+  local bundle="$1"
+  local bundle_root list_file
+  list_file="$(mktemp)"
+  tar -tzf "${bundle}" > "${list_file}"
+  bundle_root="$(awk -F/ 'NF >= 2 && $2 == "NF-SafetyHub" {print $1; exit}' "${list_file}")"
+  if [ -z "${bundle_root}" ]; then
+    rm -f "${list_file}"
+    echo "bundle 内未找到 NF-SafetyHub 目录: ${bundle}" >&2
+    exit 1
+  fi
+  rm -f "${list_file}"
+
+  local rel tmp_file
+  for rel in docker-compose.yml nginx/nginx.conf 交付运行手册/deploy_intranet_docker.sh; do
+    tmp_file="$(mktemp)"
+    tar -xOzf "${bundle}" "${bundle_root}/NF-SafetyHub/${rel}" > "${tmp_file}"
+    if ! cmp -s "${NF_PROJECT_ROOT}/${rel}" "${tmp_file}"; then
+      rm -f "${tmp_file}"
+      echo "最新 SafetyHub bundle 与当前源码不一致: ${rel}" >&2
+      echo "请先重新执行: bash 交付运行手册/build_intranet_offline_bundle.sh" >&2
+      exit 1
+    fi
+    rm -f "${tmp_file}"
+  done
+}
 
 download_first_ok() {
   # 用法: download_first_ok <输出文件> <url1> [<url2> ...]
@@ -123,6 +151,7 @@ EOF
 if [ -d "${NF_BUNDLE_OUTPUT_ROOT}" ]; then
   LATEST_BUNDLE="$(ls -1t "${NF_BUNDLE_OUTPUT_ROOT}"/safetyhub_intranet_bundle_*.tar.gz 2>/dev/null | head -n1 || true)"
   if [ -n "${LATEST_BUNDLE}" ]; then
+    verify_bundle_matches_source "${LATEST_BUNDLE}"
     log "复制最新 SafetyHub 镜像 bundle: ${LATEST_BUNDLE}"
     cp -f "${LATEST_BUNDLE}" "${APP_BUNDLE_DIR}/"
     ( cd "${APP_BUNDLE_DIR}" && sha256sum "$(basename "${LATEST_BUNDLE}")" > "$(basename "${LATEST_BUNDLE}").sha256" )

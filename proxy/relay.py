@@ -153,7 +153,14 @@ async def _relay_to_upstream(
             relay_body,
             relay_raw_body,
         )
-        return StreamingResponse(stream, media_type="text/event-stream")
+        return StreamingResponse(
+            stream,
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
     try:
         request_kwargs: dict[str, Any] = {"headers": headers}
         if request.method in JSON_BODY_METHODS:
