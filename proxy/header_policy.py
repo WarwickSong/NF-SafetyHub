@@ -68,3 +68,31 @@ def build_upstream_headers(
     upstream_api_key: str | None = None,
 ) -> dict[str, str]:
     return HeaderPolicy().build_upstream_headers(headers, request_id, upstream_api_key)
+
+
+RESPONSE_HEADER_BLOCKLIST = {
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+    "content-length",
+    "content-encoding",
+}
+
+
+def filter_response_headers(headers: Mapping[str, str]) -> dict[str, str]:
+    """剥离 hop-by-hop、Content-Length 和 Content-Encoding。
+
+    httpx 默认自动解压上游响应，body 已是明文，因此必须移除
+    Content-Encoding，避免客户端再次解码失败。
+    """
+
+    return {
+        name: value
+        for name, value in headers.items()
+        if name.lower() not in RESPONSE_HEADER_BLOCKLIST
+    }

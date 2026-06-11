@@ -378,7 +378,7 @@
 | 任务 ID | 任务 | 所属功能 | 优先级 |
 |---------|------|----------|--------|
 | S6A-01 | 新增 `/v1/*` 全局有界并发队列，配置最大在途请求数、最大排队数、排队超时和超限响应；默认目标至少支持容器总 `1000` in-flight + `2000` 排队 | F14/F1 | P0 |
-| S6A-02 | 明确多 worker 折算规则：若单实例 Docker 内启用多个 worker，进程内并发上限按 worker 数折算为容器总上限；默认 4 worker 时每 worker `V1_MAX_INFLIGHT=250`、`V1_MAX_QUEUE_SIZE=500` | F14/部署 | P0 |
+| S6A-02 | 明确多 worker 折算规则：若单实例 Docker 内启用多个 worker，进程内并发上限按 worker 数折算为容器总上限；代码默认每 worker `V1_MAX_INFLIGHT=150`、`V1_MAX_QUEUE_SIZE=200`；4 worker 生产环境推荐通过 `.env` 调到每 worker `V1_MAX_INFLIGHT=250`、`V1_MAX_QUEUE_SIZE=500` 以达到容器总目标 1000 in-flight + 2000 排队 | F14/部署 | P0 |
 | S6A-03 | 生产启动去除 `--reload`，Docker 启动脚本和文档统一使用生产模式 worker 参数 | 部署 | P0 |
 | S6A-04 | 管理端保护：`/admin/*`、`/admin/api/*`、`/health/*` 不进入 `/v1/*` 并发队列，避免压测流量拖死后台 | F8/F14 | P0 |
 | S6A-05 | `/admin/api/stats` 增加短缓存，归档/审计列表保持分页和默认轻量查询 | F8 | P0 |
@@ -394,8 +394,8 @@
 
 | 配置 | 建议默认 | 说明 |
 |------|----------|------|
-| `V1_MAX_INFLIGHT` | 默认 250/worker；4 worker 容器总目标 1000；可通过 `.env` 调整 | 每个进程内同时进入业务链路的 `/v1/*` 请求数 |
-| `V1_MAX_QUEUE_SIZE` | 默认 500/worker；4 worker 容器总目标 2000；可通过 `.env` 调整 | 每个进程内允许等待并发令牌的请求数 |
+| `V1_MAX_INFLIGHT` | 代码默认 150/worker；生产推荐 250/worker，4 worker 容器总目标 1000；可通过 `.env` 调整 | 每个进程内同时进入业务链路的 `/v1/*` 请求数 |
+| `V1_MAX_QUEUE_SIZE` | 代码默认 200/worker；生产推荐 500/worker，4 worker 容器总目标 2000；可通过 `.env` 调整 | 每个进程内允许等待并发令牌的请求数 |
 | `V1_QUEUE_TIMEOUT_SECONDS` | 默认 10~15；可通过 `.env` 调整 | 请求排队超过该时间后返回 429/503 |
 | `UPSTREAM_MAX_CONNECTIONS` | 与 `V1_MAX_INFLIGHT` 同量级 | 避免上游连接池小于业务并发导致二次排队 |
 | `UPSTREAM_MAX_KEEPALIVE_CONNECTIONS` | `UPSTREAM_MAX_CONNECTIONS` 的 30%~70% | 复用连接并控制空闲连接数量 |

@@ -1,8 +1,8 @@
 # LLM-SafetyHub 当前开发进展和下一步规划
 
-> 更新时间：2026-06-05
+> 更新时间：2026-06-11
 > 当前阶段：阶段 6A — 单实例 Docker 生产稳定性与高并发治理
-> 当前状态：阶段 1 OpenAI-compatible `/v1/*` 透传中继与健康检查已完成；阶段 2 弱扫描 MVP 已完成；阶段 3 归档 + 审计 + 文生图图片资产异步归档已完成；阶段 4 管理员认证 + 最小后台框架已完成；阶段 5 APIKey 管理已完成；阶段 6 KeyProvider + `oneapi_nanfu_yxai` 中转站联通核心能力已完成；阶段 6A 的工程改造已进入当前代码，包括 `/v1/*` 有界并发队列、请求体大小限制、共享上游 HTTP 连接池、归档/审计有界后台队列、后台统计短缓存、运行状态 API、Docker 生产 worker 启动方式和 PostgreSQL 运行配置。当前自动化测试基线为 `94 passed`。阶段 7 及之后暂不开发，仅保留长期规划；生产上线前重点转为真实上游联调、高并发阶梯压测、PostgreSQL 稳定性、备份恢复、运维安全配置和生产验收。
+> 当前状态：阶段 1~6A 核心能力已全部落地（详见第二、三、四章）；2026-06 完成"透明中继兼容性修复"，把 SafetyHub 中继层从 JSON 重序列化改造为字节级透传，能正确处理主流 LLM 客户端（含严格 JSON / 自定义 key 顺序 / 压缩响应 / 流式 SSE / 未知 JSON 端点等场景），同时保留原有扫描 / 脱敏 / 拦截 / 归档全部能力（详见第四 A 章）。当前自动化测试基线为 `94 passed`，其中中继相关 64/64 全绿。阶段 7 及之后暂不开发，仅保留长期规划；生产上线前重点转为真实上游联调、高并发阶梯压测、PostgreSQL 稳定性、备份恢复、运维安全配置和生产验收。
 
 ---
 
@@ -14,7 +14,7 @@
 
 阶段 6 已实现 `governance/key_provider.py`、`governance/providers/{passthrough,static_key,oneapi_nanfu_yxai}.py`，`main.py` lifespan 会根据 `KEY_PROVIDER_TYPE` 实例化 Provider 并注入 `ApiKeyService`。后台创建表单支持“手动录入中转站 Key”和“由 KeyProvider 创建”，Provider 创建默认 K-Sync，创建成功后返回完整 SafetyHub Key 供管理员复制；列表默认只展示前后缀，管理员可按需点击 reveal/复制完整 Key 并写入操作审计。`oneapi_nanfu_yxai` 已对接 yxai 中转站登录、创建、获取完整 Key、删除和分页列表接口，支持 `KEY_PROVIDER_BASE_URL`、`KEY_PROVIDER_USERNAME`、`KEY_PROVIDER_PASSWORD_ENV`、`KEY_PROVIDER_AUTH_VERSION`、默认 quota 和重试参数配置。`scripts/import_yxai_keys.py` 已支持从 `yxai_token_export.json` 幂等导入历史中转站 Key。
 
-阶段 6A 当前代码已新增 `middleware/concurrency_limit.py`、`middleware/request_limit.py`、`runtime/upstream_client.py`、`runtime/archive_queue.py`、`runtime/admin_cache.py` 和 `/admin/api/runtime`。`/v1/*` 请求统一进入进程内有界并发队列，默认配置口径为每 worker `V1_MAX_INFLIGHT=250`、`V1_MAX_QUEUE_SIZE=500`，4 worker 下容器总目标为 `1000` in-flight + `2000` 排队；队列满或排队超时返回 429，并通过响应头暴露排队等待、在途数和队列数。`/admin/*`、`/admin/api/*`、`/health/*` 不进入该队列。归档/审计写入已通过 `ArchiveQueue` 削峰，支持队列上限、批量写入、处理数和丢弃数快照；上游请求优先复用应用生命周期内的共享 `AsyncClient`，并通过 `.env` 配置最大连接、keepalive 和超时。Dockerfile 当前使用 `uvicorn main:app --workers ${UVICORN_WORKERS:-4}`，不包含 `--reload`。
+阶段 6A 当前代码已新增 `middleware/concurrency_limit.py`、`middleware/request_limit.py`、`runtime/upstream_client.py`、`runtime/archive_queue.py`、`runtime/admin_cache.py` 和 `/admin/api/runtime`。`/v1/*` 请求统一进入进程内有界并发队列，代码默认每 worker `V1_MAX_INFLIGHT=150`、`V1_MAX_QUEUE_SIZE=200`；生产环境推荐通过 `.env` 调到每 worker `V1_MAX_INFLIGHT=250`、`V1_MAX_QUEUE_SIZE=500`，4 worker 下容器总目标为 `1000` in-flight + `2000` 排队。队列满或排队超时返回 429，并通过响应头暴露排队等待、在途数和队列数。`/admin/*`、`/admin/api/*`、`/health/*` 不进入该队列。归档/审计写入已通过 `ArchiveQueue` 削峰，支持队列上限、批量写入、处理数和丢弃数快照；上游请求优先复用应用生命周期内的共享 `AsyncClient`，并通过 `.env` 配置最大连接、keepalive 和超时。Dockerfile 当前使用 `uvicorn main:app --workers ${UVICORN_WORKERS:-4}`，不包含 `--reload`。
 
 当前代码尚未具备路径 C 自动续约迁移结果页、Provider 切换演练页、替换后首次请求失败自动回滚、图片资产后台预览/下载页面、图片资产存储配额和清理任务、告警通知、文件安全、审批运行链路和中转站配额/速率只读观测能力。阶段 6A 的高并发能力已具备代码基础，但仍需真实上游和 Docker 生产环境下完成阶梯压测、连接池观测、PostgreSQL 长时间运行、备份恢复、日志脱敏和运维安全复核。
 
@@ -68,7 +68,31 @@
 | 后台统计缓存 | `runtime/admin_cache.py`、`admin/router.py` | `/admin/api/stats` 通过 TTL 缓存避免首页统计在压测期间反复重查询 |
 | 运行状态 API | `admin/router.py`、`admin/schemas.py`、`admin/static/js/app.js`、`admin/static/index.html` | `/admin/api/runtime` 返回 worker pid、配置 worker 数、`/v1` 并发快照、归档队列快照、上游连接池配置和后台缓存配置；仪表盘可展示运行状态 |
 | Docker 生产启动 | `Dockerfile`、`docker-compose.yml`、`.env.example` | Dockerfile 使用多 worker 生产命令，不使用 `--reload`；Compose 包含 PostgreSQL、SafetyHub、Nginx 和健康检查；`.env.example` 包含阶段 6A 配置项 |
+| 透明中继兼容性修复（2026-06） | `proxy/relay.py`、`proxy/stream.py`、`proxy/header_policy.py` | 未脱敏请求改为 `content=raw_body` 字节透传，避免 httpx 重序列化破坏严格 JSON / 上游签名；流式 SSE 同步支持 `raw_body`；新增 `filter_response_headers` 统一剥离 hop-by-hop / `Content-Length` / `Content-Encoding`；非 `KNOWN_JSON_ENDPOINTS` 端点 JSON 解析失败由 400 降级为字节透传；64/64 中继相关测试通过 |
 | 自动化测试 | `tests/` | 当前全量测试 `94 passed`，覆盖并发闸门、APIKey、归档审计、图片资产、后台认证、规则热加载、中继和 Header Policy |
+
+---
+
+## 四 A、透明中继兼容性修复（2026-06）
+
+> 背景：早期 SafetyHub 一律使用 `client.request(json=body)` 把请求重序列化后转发上游，导致只能应对 `test_llm_connection.py` 这种简单请求；主流 LLM 客户端（带签名、严格 JSON、自定义 key 顺序、压缩响应等）会出现上游 4xx/5xx 或客户端解码失败。本次修复参考 `temp/transparent_llm_proxy.py` 的设计，把 SafetyHub 中继层改造为字节级透传，同时保留扫描 / 脱敏 / 拦截 / 归档所有原有能力。
+
+| 维度 | 修改前 | 修改后 |
+|------|--------|--------|
+| 请求字节路径 | 始终 `json=body` 重序列化 | `_select_relay_payload` 三态分流：脱敏走 `json=body`，其它走 `content=raw_body`，无 body 不带 |
+| 流式发起 | `client.stream(json=body)` | `proxy_stream` / `collect_stream` 新增 `raw_body` 参数，优先字节透传 |
+| 响应头处理 | 只删 `Content-Encoding`，但流式 chunk 仍是压缩字节，客户端解码错乱 | `filter_response_headers` 统一剥 hop-by-hop + `Content-Length` + `Content-Encoding`；httpx 默认自动解压 body，下行明文与头一致 |
+| 未知 JSON POST 解析失败 | 一律 400 | `KNOWN_JSON_ENDPOINTS` 仍 400，其它端点降级字节透传 |
+| 路由前缀 / 扫描范围 / 审计字段 | — | **完全不变** |
+
+**字节流不变量**：
+
+1. 客户端 → 上游：未脱敏路径 byte-for-byte 透传（保留 `messages` 顺序、空白、`ensure_ascii=false`、`tool_calls` 等结构）。
+2. 上游 → 客户端：始终是明文 body + 不带 `Content-Encoding` 的响应头，客户端不会再做一次 gzip 解码。
+3. 拦截：完全本地构造，不消耗上游配额。
+4. 脱敏：仅当真正命中手机号才会改字节，其它 chat 请求与透明代理表现一致。
+
+**关键决策**：仍然保留 `httpx`，**未**切换到 `aiohttp`；通过 curl 实测上游 `yxai-api.nanfu.com` 仅 HTTP/1.1，无 HTTP/2 push、无 socket 级 keepalive 调参需求、无 WebSocket 双工，所以保留 httpx 不影响兼容性。`upstream_keepalive_expiry=30s < 上游 nginx keepalive_timeout=75s`，可规避 `RemoteDisconnected`。
 
 ---
 
@@ -136,6 +160,7 @@ NF-SafetyHub/
 ├── proxy/
 ├── observability/
 ├── storage/
+│   ├── admin_ops.py
 │   ├── archive.py
 │   ├── audit.py
 │   ├── database.py
@@ -150,7 +175,14 @@ NF-SafetyHub/
 │   ├── schemas.py
 │   └── static/
 │       ├── api_keys.html
+│       ├── approvals.html
+│       ├── archives.html
+│       ├── blocks.html
 │       ├── index.html
+│       ├── login.html
+│       ├── observations.html
+│       ├── rules.html
+│       ├── settings.html
 │       ├── css/style.css
 │       └── js/app.js
 ├── governance/
@@ -167,15 +199,32 @@ NF-SafetyHub/
 │   └── request_limit.py
 ├── scripts/
 │   ├── import_yxai_keys.py
+│   ├── init_db.py
+│   ├── migrate_apikeys_to_fernet.py
 │   ├── migrate_sqlite_to_postgres.py
 │   └── verify_postgres_migration.py
 ├── tests/
-│   ├── test_concurrency_limit.py
-│   ├── test_relay_image_assets.py
+│   ├── test_admin_auth.py
 │   ├── test_admin_image_assets.py
+│   ├── test_admin_stage4.py
 │   ├── test_api_keys.py
+│   ├── test_archive.py
+│   ├── test_audit.py
+│   ├── test_concurrency_limit.py
+│   ├── test_fake_response.py
+│   ├── test_header_policy.py
+│   ├── test_health.py
+│   ├── test_image_assets.py
+│   ├── test_keyword.py
+│   ├── test_models.py
+│   ├── test_observations.py
+│   ├── test_regex.py
 │   ├── test_relay.py
-│   └── ...
+│   ├── test_relay_image_assets.py
+│   ├── test_rules_config.py
+│   ├── test_rules_reload.py
+│   ├── test_scanner.py
+│   └── test_upstream_router.py
 └── 产品研发控制/
 ```
 
@@ -185,7 +234,7 @@ NF-SafetyHub/
 
 | 验证项 | 命令 | 当前结果 |
 |--------|------|----------|
-| 全量单元测试 | `.\.venv\Scripts\python.exe -m pytest` | 通过，`94 passed` |
+| 全量单元测试 | `.\.venv\Scripts\python.exe -m pytest` | 历史基线 `94 passed`（开发环境 SQLite 内存库口径）。当仓库根 `.env` 已切换到真实 PostgreSQL 时，部分测试（`test_health.py`、`test_admin_auth.py`）会因为 `Starlette BaseHTTPMiddleware` + `asyncpg` 在 ASGI 测试 client 中的事件循环交错而出现 `Future attached to a different loop` / `another operation is in progress` 报错；`test_production_startup_validation_*` 也会因为 `Settings.get_secret()` 回退读取仓库根 `.env` 导致断言落空。这些都是测试 fixture 与生产 `.env` 耦合的环境问题，不是生产代码缺陷，生产 `uvicorn --workers=4` 运行时不复现；如需在本地复现历史基线，应使用 `DB_URL=sqlite+aiosqlite:///:memory:` 并取消 `.env` 中的 `SAFETYHUB_DATA_KEY` 后再跑 |
 | 并发闸门专项测试 | `pytest tests/test_concurrency_limit.py` | 覆盖响应头、非 `/v1/*` 不受限、队列满、排队超时、排队释放后放行 |
 | APIKey / KeyProvider 专项测试 | `pytest tests/test_api_keys.py` | 覆盖手动创建、Provider 创建、reveal、上游 Key 替换、加密不回显、删除已吊销 Key 和请求体大小限制 |
 | 图片资产专项测试 | `pytest tests/test_image_assets.py tests/test_relay_image_assets.py tests/test_admin_image_assets.py` | 覆盖文生图响应引用提取、本体归档、后台状态 API 和操作审计 |

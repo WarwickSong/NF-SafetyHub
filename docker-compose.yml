@@ -44,6 +44,9 @@ services:
       - safetyhub
     ports:
       - "${SAFETYHUB_HTTP_PORT:-80}:80"
+      - "${SAFETYHUB_HTTPS_PORT:-443}:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      # 证书目录由部署方下发，包含 safetyhub.crt / safetyhub.key
+      - ${SAFETYHUB_TLS_CERT_DIR:-./nginx/certs}:/etc/nginx/certs:ro
     restart: unless-stopped

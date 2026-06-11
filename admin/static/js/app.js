@@ -333,13 +333,20 @@ async function saveApiKey(row) {
     return;
   }
   setApiKeyMessage("保存中...");
-  await SafetyHub.api(`/admin/api/api-keys/${encodeURIComponent(row.dataset.id)}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(fields)
-  });
-  setApiKeyMessage("APIKey 已更新。");
-  await loadApiKeys();
+  try {
+    await SafetyHub.api(`/admin/api/api-keys/${encodeURIComponent(row.dataset.id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(fields)
+    });
+    setApiKeyMessage("APIKey 已更新。");
+    await loadApiKeys();
+  } catch (error) {
+    // 任何失败（401 会话失效、422 校验错误、500 等）都要把状态恢复并提示用户，
+    // 否则按钮会一直停在“保存中...”，看起来像页面卡死。
+    setApiKeyMessage(`保存失败：${error.message}`);
+    row.classList.remove("editing");
+  }
 }
 
 async function createApiKey() {

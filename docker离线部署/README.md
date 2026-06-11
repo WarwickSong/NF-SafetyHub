@@ -16,12 +16,15 @@ docker离线部署/
 │   └── SHA256SUMS
 ├── app-bundle/                   # NF-SafetyHub 镜像 bundle（含 postgres / nginx / safetyhub）
 │   └── safetyhub_intranet_bundle_<ts>.tar.gz
+├── 部署文件/                      # 最终交付产物的默认输出目录（git 仅保留 .gitignore 与 *.sha256）
+│   ├── docker-offline-deploy_<ts>.tar.gz
+│   └── docker-offline-deploy_<ts>.tar.gz.sha256
 ├── systemd/                      # docker / containerd 的 systemd 单元
 │   ├── docker.service
 │   ├── docker.socket
 │   └── containerd.service
 └── scripts/
-    ├── prepare-offline-package.sh   # 在“联网机器”上执行: 拉取依赖 + 打包
+    ├── prepare-offline-package.sh   # 在“联网机器”上执行: 拉取依赖 + 打包到 部署文件/
     ├── install.sh                   # 在“内网离线服务器”上执行: 安装 + 部署
     └── uninstall.sh                 # 卸载 docker
 ```
@@ -32,7 +35,8 @@ docker离线部署/
 > 生成 `safetyhub_intranet_bundle_<ts>.tar.gz`。
 
 ```bash
-cd /var/www/docker离线部署
+# 进入仓库内的 docker离线部署 目录（路径相对于你当前 clone 的位置即可，不必固定在 /var/www）
+cd <仓库根>/docker离线部署
 bash scripts/prepare-offline-package.sh
 ```
 
@@ -40,9 +44,21 @@ bash scripts/prepare-offline-package.sh
 
 1. 下载 Docker Engine 静态二进制（默认 `27.3.1`，`x86_64`）。
 2. 下载 docker compose v2 二进制（默认 `v2.29.7`）。
-3. 复制 `NF-SafetyHub/内网离线部署包/` 下最新的 `safetyhub_intranet_bundle_*.tar.gz`。
-4. 在 **本目录的上一级**（即 `/var/www/`）下生成
-   `docker-offline-deploy_<ts>.tar.gz` + `.sha256`，避免 tar 边写边读。
+3. 复制仓库 `内网离线部署包/` 下最新的 `safetyhub_intranet_bundle_*.tar.gz`。
+4. 在 `docker离线部署/部署文件/` 下生成
+   `docker-offline-deploy_<ts>.tar.gz` + `.sha256`，作为正式交付产物。
+   打包时会自动 `--exclude` 掉 `部署文件/`，避免把刚生成的包再打进去。
+
+> 默认路径全部基于脚本所在的 `docker离线部署/` 目录推导，不依赖任何绝对路径，
+> 仓库迁移到任意位置都能直接运行。如需自定义，可通过环境变量覆盖：
+>
+> ```bash
+> # 自定义最终交付产物目录（绝对路径或相对于当前 cwd）
+> PKG_OUTPUT_DIR=/tmp/safetyhub-out bash scripts/prepare-offline-package.sh
+>
+> # 把 docker离线部署/ 单独拷出来运行时，需要显式指向真正的 NF-SafetyHub 仓库根
+> NF_PROJECT_ROOT=/path/to/NF-SafetyHub bash scripts/prepare-offline-package.sh
+> ```
 
 默认下载源（已实测可用，全部是国内镜像/代理）：
 
@@ -66,7 +82,8 @@ COMPOSE_URLS="https://your.mirror/docker-compose-linux-x86_64" \
 
 ## 步骤 2：拷贝到内网服务器
 
-将 `docker-offline-deploy_<ts>.tar.gz` 与同名 `.sha256` 拷贝到目标服务器，校验后解压：
+将 `部署文件/` 下的 `docker-offline-deploy_<ts>.tar.gz` 与同名 `.sha256` 拷贝到目标服务器，
+校验后解压：
 
 ```bash
 sha256sum -c docker-offline-deploy_<ts>.tar.gz.sha256
@@ -74,20 +91,46 @@ tar -xzf docker-offline-deploy_<ts>.tar.gz
 cd docker离线部署
 ```
 
-## 步骤 3：确认公网网关转发
+## 步骤 3：准备 HTTPS 证书与公网网关转发
 
-本包按公网网关 HTTPS 终止模式部署：
+管理后台启用了 `Secure` Cookie，必须通过 HTTPS 访问，否则会出现登录后保存 APIKey 等
+请求被浏览器丢弃 Cookie 而 401，前端表现为“一直保存中、刷新后未保存成功”。
+本包提供两种生产部署模式，**任选其一**：
+
+### 模式 A：上游公网网关做 TLS 终止（推荐）
 
 ```text
-外网用户 -> https://llm-safetyhub.nanfu.com -> 运维公网网关/负载均衡 -> http://192.168.1.47:80 -> SafetyHub
+外网用户 -> https://llm-safetyhub.nanfu.com -> 公网网关/负载均衡（HTTPS 终止）
+        -> http://内网节点:80 -> SafetyHub
 ```
 
-服务器本机不保存 HTTPS 证书，也不直接处理 TLS。请运维确认：
+公网网关需要在反向代理时强制注入：
 
-- `llm-safetyhub.nanfu.com` 公网 DNS 指向公网网关/负载均衡
-- 网关/负载均衡上配置 `llm-safetyhub.nanfu.com` 的 HTTPS 证书
-- 网关后端转发目标为 `http://192.168.1.47:80`
-- 网关到后端服务器 TCP `80` 已放通
+```text
+X-Forwarded-Proto: https
+```
+
+容器内 uvicorn 已启用 `--proxy-headers`，会基于该头识别为 HTTPS 并设置 Secure Cookie。
+此模式下内网节点无需保存证书，nginx 80 端口照常工作（80 入口里 `/health/` 保留 HTTP，
+其余路径会跳转 https，由公网网关回写）。
+
+### 模式 B：内网 nginx 自己做 TLS 终止
+
+将证书放到内网节点上，由本包内的 nginx 容器直接监听 443：
+
+1. 在内网节点准备证书目录（默认值见 `内网离线部署包/intranet.env` 的
+   `SAFETYHUB_TLS_CERT_DIR`，例如 `/home/safetyhub/certs`）：
+
+   ```text
+   safetyhub.crt   # 域名证书（包含中间证书链）
+   safetyhub.key   # 私钥，权限建议 600
+   ```
+
+2. 确认 `内网离线部署包/intranet.env` 中：
+   - `SAFETYHUB_HTTP_PORT=80`、`SAFETYHUB_HTTPS_PORT=443`
+   - `SAFETYHUB_TLS_CERT_DIR` 指向上述目录
+3. 业务域名解析到该内网节点 443，80 仅做 `301 → https://`。
+4. 浏览器最终访问：`https://<内网域名>/admin/`。
 
 ## 步骤 4：执行一键安装
 

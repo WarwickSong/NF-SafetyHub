@@ -1,4 +1,5 @@
 import base64
+import json
 
 import httpx
 import pytest
@@ -204,6 +205,75 @@ def test_chat_completions_relays_non_stream_request(relay_test_client, monkeypat
     assert response.json()["id"] == "chatcmpl-upstream"
     assert captured["url"] == "https://upstream.example.com/v1/chat/completions"
     assert captured["authorization"] == "Bearer test-key"
+
+
+def test_chat_completions_relays_agent_tool_request_shape(relay_test_client, monkeypatch):
+    captured = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.content.decode("utf-8")
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-upstream",
+                "object": "chat.completion",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    original_async_client = httpx.AsyncClient
+
+    def build_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", build_client)
+
+    request_body = {
+        "model": "gpt-test",
+        "messages": [
+            {"role": "system", "content": "你是一个编程助手。"},
+            {"role": "user", "content": "读取文件并总结。"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": '{"path":"/tmp/a.py"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "print('hello')"},
+            {"role": "user", "content": "继续总结。"},
+        ],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "description": "读取文件",
+                    "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+                },
+            }
+        ],
+        "tool_choice": "auto",
+        "parallel_tool_calls": True,
+        "stream_options": {"include_usage": True},
+        "stream": False,
+    }
+
+    response = relay_test_client.post("/v1/chat/completions", json=request_body)
+
+    assert response.status_code == 200
+    relayed_body = json.loads(captured["body"])
+    assert relayed_body["tools"] == request_body["tools"]
+    assert relayed_body["tool_choice"] == "auto"
+    assert relayed_body["parallel_tool_calls"] is True
+    assert relayed_body["stream_options"] == {"include_usage": True}
+    assert relayed_body["messages"][2]["tool_calls"] == request_body["messages"][2]["tool_calls"]
 
 
 def test_chat_completions_archives_and_audits_desensitized_request(relay_test_app, monkeypatch):

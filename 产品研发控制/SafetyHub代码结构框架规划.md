@@ -48,6 +48,7 @@ NF-SafetyHub/
 │   ├── archive.py
 │   ├── audit.py
 │   ├── database.py
+│   ├── image_assets.py
 │   └── models.py
 ├── admin/
 │   ├── router.py
@@ -67,20 +68,26 @@ NF-SafetyHub/
 ├── middleware/
 │   ├── auth.py
 │   ├── concurrency_limit.py      # 阶段 6A：/v1/* 全局有界并发队列
-│   └── identity.py
+│   ├── identity.py
+│   └── request_limit.py          # 阶段 6A：请求体大小限制
 ├── notify/
 │   └── __init__.py
 ├── nginx/
 │   └── nginx.conf
 ├── scripts/
 │   ├── import_yxai_keys.py
-│   └── init_db.py
+│   ├── init_db.py
+│   ├── migrate_apikeys_to_fernet.py
+│   ├── migrate_sqlite_to_postgres.py
+│   └── verify_postgres_migration.py
 ├── tests/
 │   ├── test_admin_auth.py
+│   ├── test_admin_image_assets.py
 │   ├── test_admin_stage4.py
 │   ├── test_api_keys.py
 │   ├── test_archive.py
 │   ├── test_audit.py
+│   ├── test_concurrency_limit.py
 │   ├── test_fake_response.py
 │   ├── test_header_policy.py
 │   ├── test_health.py
@@ -90,6 +97,7 @@ NF-SafetyHub/
 │   ├── test_observations.py
 │   ├── test_regex.py
 │   ├── test_relay.py
+│   ├── test_relay_image_assets.py
 │   ├── test_rules_config.py
 │   ├── test_rules_reload.py
 │   ├── test_scanner.py
@@ -219,11 +227,11 @@ class Settings(BaseSettings):
     upstream_timeout_read: int = 120           # 读取超时(秒)
     upstream_timeout_pool: int = 5             # 上游连接池等待超时(秒)
     upstream_max_connections: int = 200        # 阶段 6A：每 worker 上游最大连接数
-    upstream_max_keepalive_connections: int = 100
+    upstream_max_keepalive_connections: int = 150
     upstream_keepalive_expiry: int = 30
 
-    v1_max_inflight: int = 250                 # 阶段 6A：每 worker /v1/* 最大在途请求数；4 worker 总目标 1000
-    v1_max_queue_size: int = 500               # 阶段 6A：每 worker /v1/* 最大排队数；4 worker 总目标 2000
+    v1_max_inflight: int = 150                 # 阶段 6A：每 worker /v1/* 最大在途请求数；生产环境推荐通过 .env 调到 250 以达到 4 worker 总目标 1000
+    v1_max_queue_size: int = 200               # 阶段 6A：每 worker /v1/* 最大排队数；生产环境推荐通过 .env 调到 500 以达到 4 worker 总目标 2000
     v1_queue_timeout_seconds: float = 15       # 阶段 6A：排队等待超时，可通过 .env 调整
     admin_stats_cache_seconds: int = 10        # 阶段 6A：后台统计短缓存
     archive_queue_max_size: int = 5000         # 阶段 6A：归档后台队列上限
@@ -301,14 +309,26 @@ settings = Settings()
 
 ```python
 from fastapi import APIRouter, Request, Depends
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, Response
 import httpx
 from engine.scanner import ScannerOrchestrator
 from proxy.fake_response import generate_fake_response
 from proxy.stream import SSEStreamProxy
+from proxy.header_policy import build_upstream_headers, filter_response_headers
 from storage.archive import ArchiveWriter
 from storage.audit import AuditWriter
 router = APIRouter()
+
+KNOWN_JSON_ENDPOINTS = {
+    "/v1/chat/completions",
+    "/v1/embeddings",
+    "/v1/completions",
+    "/v1/responses",
+    "/v1/images/generations",
+    "/v1/images/edits",
+    "/v1/images/variations",
+}
+JSON_BODY_METHODS = {"POST", "PUT", "PATCH"}
 
 
 @router.post("/chat/completions")
@@ -319,24 +339,75 @@ async def chat_completions(request: Request):
 @router.api_route("/{upstream_path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 async def relay_openai_compatible(request: Request, upstream_path: str):
     path = f"/v1/{upstream_path.strip('/')}"
-    body, raw_body = await read_request_body(request, path)
+    body, raw_body = await _read_request_body(request, path)
+    action_taken = "passed"
+
     if path == "/v1/chat/completions":
-        scan_text = extract_text_from_request(path, body)
+        scan_text = extract_latest_text_from_request(path, body)
         if scan_text:
             scan_result = await request.app.state.scanner.scan(scan_text)
             if scan_result.blocked:
                 return await generate_fake_response(body, scan_result, body.get("stream", False))
+        body, was_desensitized = desensitize_chat_request_body(body)
+        if was_desensitized:
+            action_taken = "desensitized"
 
-    return await relay_to_upstream(request, path, body, raw_body)
+    return await _relay_to_upstream(request, path, body, raw_body, action_taken)
 
 
-def extract_text_from_request(path: str, body: dict) -> str:
-    ...
+async def _read_request_body(request: Request, path: str) -> tuple[dict | None, bytes]:
+    """读请求体；同时返回解析后的 dict（仅扫描 / 脱敏 / 归档需要）和原始字节 raw_body。
+
+    - KNOWN_JSON_ENDPOINTS：必须 JSON object，否则 400
+    - 仅 Content-Type=application/json 的未知端点：解析失败降级为 (None, raw_body) 字节透传
+    - 其它：(None, raw_body) 直接透传
+    """
+    if request.method not in JSON_BODY_METHODS:
+        return None, b""
+    raw_body = await request.body()
+    if not raw_body:
+        return None, raw_body
+    is_known = path in KNOWN_JSON_ENDPOINTS
+    if not is_known and "application/json" not in request.headers.get("content-type", "").lower():
+        return None, raw_body
+    try:
+        body = await request.json()
+    except Exception as exc:
+        if is_known:
+            raise HTTPException(status_code=400, detail="invalid json body") from exc
+        # 未知端点：非严格 JSON 也允许字节透传，避免拒绝合法请求
+        return None, raw_body
+    if is_known and not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="json body must be an object")
+    return body, raw_body
 
 
-def extract_text_from_messages(messages: list) -> str:
-    ...
+def _select_relay_payload(method, body, raw_body, action_taken) -> tuple[dict | None, bytes | None]:
+    """决定向上游转发时使用 json=body 还是 content=raw_body。
+
+    - 非 POST/PUT/PATCH → 不带 body
+    - desensitized      → json=body（必须重序列化以落地脱敏字节）
+    - 其它且 raw_body 非空 → content=raw_body（客户端原始字节透传）
+    - 仅 dict 可用      → json=body 兜底
+    """
+    if method not in JSON_BODY_METHODS:
+        return None, None
+    if action_taken == "desensitized" and isinstance(body, dict):
+        return body, None
+    if raw_body:
+        return None, raw_body
+    if body is not None:
+        return body, None
+    return None, None
 ```
+
+**核心设计点（透明中继兼容性，2026-06 修复）**
+
+1. **请求字节路径**：未触发脱敏时一律 `content=raw_body` 字节透传，保留客户端原始 key 顺序、空白、`ensure_ascii=false` 等细节，避免 httpx 重序列化破坏上游签名/严格 JSON 校验；脱敏路径才走 `json=body` 重序列化。
+2. **响应字节路径**：上游 `httpx.AsyncClient` 默认自动解压 gzip/deflate；响应 headers 通过 `filter_response_headers` 统一剥离 hop-by-hop + `Content-Length` + `Content-Encoding`，避免客户端对已解压 body 二次解码。
+3. **未知端点容错**：仅 `KNOWN_JSON_ENDPOINTS` 严格要求 JSON object（扫描/归档需要 dict）；其它未知 `/v1/*` JSON POST 解析失败时降级为字节透传，保证通用代理不拒绝任何合法上游请求。
+4. **Authorization 替换**：`build_upstream_headers(headers, request_id, upstream_api_key)` 在 `upstream_api_key` 非空时把客户端 SafetyHub Key 替换为中转站真实 Key，并附 `X-Request-ID`。
+5. **流式同链路**：`is_stream` 时改走 `SSEStreamProxy.proxy_stream(...)`，签名同样接受 `raw_body`，归档由上层 `_stream_with_archive` 用 `StreamArchiveCollector` 边转发边收集（受 `stream_archive_max_bytes` 约束）。
 
 **核心流程**
 
@@ -383,12 +454,22 @@ class SSEStreamProxy:
         client: httpx.AsyncClient,
         method: str,
         url: str,
-        headers: dict,
-        body: dict,
+        headers: dict[str, str],
+        body: dict | None = None,
+        raw_body: bytes | None = None,
     ) -> AsyncGenerator[bytes, None]:
-        async with client.stream(
-            method, url, json=body, headers=headers
-        ) as upstream:
+        """流式透传：raw_body 优先（字节透传），否则用 json=body 重序列化。"""
+        request_kwargs: dict = {"headers": headers}
+        if raw_body is not None:
+            request_kwargs["content"] = raw_body
+        elif body is not None:
+            request_kwargs["json"] = body
+        async with client.stream(method, url, **request_kwargs) as upstream:
+            if upstream.status_code >= 400:
+                # 上游错误：以 SSE error 事件回写，不再尝试拼装正常 chunk
+                error_payload = await upstream.aread()
+                yield _sse_error_event(upstream.status_code, error_payload)
+                return
             async for chunk in upstream.aiter_bytes():
                 yield chunk
 
@@ -397,26 +478,32 @@ class SSEStreamProxy:
         client: httpx.AsyncClient,
         method: str,
         url: str,
-        headers: dict,
-        body: dict,
-    ) -> AsyncGenerator[tuple[bytes, str], None]:
-        full_content = []
-        async with client.stream(
-            method, url, json=body, headers=headers
-        ) as upstream:
+        headers: dict[str, str],
+        body: dict | None = None,
+        raw_body: bytes | None = None,
+    ) -> AsyncGenerator[tuple[bytes | None, str | None], None]:
+        """归档辅助：透传 + 拼接完整字节，用于 _stream_with_archive 落归档。"""
+        full_content: list[bytes] = []
+        request_kwargs: dict = {"headers": headers}
+        if raw_body is not None:
+            request_kwargs["content"] = raw_body
+        elif body is not None:
+            request_kwargs["json"] = body
+        async with client.stream(method, url, **request_kwargs) as upstream:
             async for chunk in upstream.aiter_bytes():
                 yield chunk, None
                 full_content.append(chunk)
-        yield None, b"".join(full_content).decode("utf-8")
+        yield None, b"".join(full_content).decode("utf-8", errors="replace")
 ```
 
 **设计要点**
 
-- `proxy_stream`：纯透传模式，chunk 到达即转发，延迟最低
-- `collect_stream`：透传 + 收集模式，在透传的同时拼接完整响应，用于消息归档
-- 阶段 6A 默认使用应用生命周期内共享的 `httpx.AsyncClient`，不在每个请求中重复创建 client
-- 阶段 6A 流式归档必须受 `stream_archive_max_bytes` / `archive_max_payload_bytes` 约束，超过上限保存截断标记和原始字节数
-- 两种模式通过配置切换，默认使用 `collect_stream`（需要归档完整响应）
+- `proxy_stream`：纯透传模式，chunk 到达即转发，延迟最低；优先 `content=raw_body` 实现字节级透传，仅脱敏分支才走 `json=body`。
+- `collect_stream`：保留作为可选的"边转发边拼接"模式；当前默认实现使用 `proxy_stream` + 上层 `StreamArchiveCollector`（在 `proxy/relay.py::_stream_with_archive` 内）完成归档收集，避免在生成器内同时承担两种职责。
+- `aiter_bytes()`：httpx `AsyncClient` 默认自动解压 gzip/deflate，下发给客户端的是明文字节；配合 `filter_response_headers` 剥 `Content-Encoding` 保证响应头与字节一致。
+- 错误映射：`PoolTimeout → 429`、`Connect/Read/WriteTimeout → 504`、`TransportError → 502`，都包装成 `event: error\ndata: {...}\n\n` 的 SSE 事件回写，不让客户端长连接 hang 死。
+- 阶段 6A 默认使用应用生命周期内共享的 `httpx.AsyncClient`（`app.state.upstream_client`），不在每个请求中重复创建 client；`keepalive_expiry=30s` 必须 < 上游 nginx `keepalive_timeout=75s`，避免复用已被服务端关闭的连接。
+- 阶段 6A 流式归档必须受 `stream_archive_max_bytes` / `archive_max_payload_bytes` 约束，超过上限保存截断标记和原始字节数。
 
 ---
 
@@ -1270,8 +1357,8 @@ class AdminAuthMiddleware(BaseHTTPMiddleware):
 | 能力 | 设计要求 |
 |------|----------|
 | 作用范围 | 仅作用于 `/v1/*`，不包裹 `/admin/*`、`/admin/api/*`、`/health/*` 和静态资源 |
-| 最大在途 | 使用 `v1_max_inflight` 控制每 worker 同时进入业务链路的请求数，默认 4 worker 下每 worker 250、容器总目标 1000 |
-| 有界排队 | 使用 `v1_max_queue_size` 控制等待令牌的请求数，默认 4 worker 下每 worker 500、容器总目标 2000，队列满时立即返回 429 或 503 |
+| 最大在途 | 使用 `v1_max_inflight` 控制每 worker 同时进入业务链路的请求数，代码默认 150；生产环境推荐通过 `.env` 调到 250，4 worker 下容器总目标 1000 |
+| 有界排队 | 使用 `v1_max_queue_size` 控制等待令牌的请求数，代码默认 200；生产环境推荐通过 `.env` 调到 500，4 worker 下容器总目标 2000，队列满时立即返回 429 或 503 |
 | 排队超时 | 使用 `v1_queue_timeout_seconds` 控制等待令牌最长时间，超时后返回明确错误，不允许无限挂起 |
 | 流式口径 | 流式与非流式统一进入 `/v1/*` 并发闸门，不单独维护流式并发池 |
 | 可观测字段 | 在响应头或日志中保留 request_id、queue_wait_ms、inflight、queue_size、reject_reason 等摘要字段 |

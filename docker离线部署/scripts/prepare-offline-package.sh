@@ -4,8 +4,14 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_ROOT="$(cd "${ROOT_DIR}/.." && pwd)"
 DOCKER_DIR="${ROOT_DIR}/docker"
 APP_BUNDLE_DIR="${ROOT_DIR}/app-bundle"
+# 最终交付产物的默认输出目录：docker离线部署/部署文件/
+# 调用方可通过 PKG_OUTPUT_DIR 覆盖（绝对/相对路径都允许，相对路径基于当前工作目录解析）。
+PKG_OUTPUT_DIR_RAW="${PKG_OUTPUT_DIR:-${ROOT_DIR}/部署文件}"
+mkdir -p "${PKG_OUTPUT_DIR_RAW}"
+PKG_OUTPUT_DIR="$(cd "${PKG_OUTPUT_DIR_RAW}" && pwd)"
 
 # 默认锁定到目标内网服务器使用的版本，必要时可以通过环境变量覆盖。
 DOCKER_VERSION="${DOCKER_VERSION:-27.3.1}"
@@ -35,7 +41,9 @@ DOCKER_URLS=( ${DOCKER_URLS:-${DEFAULT_DOCKER_URLS[@]}} )
 # shellcheck disable=SC2206
 COMPOSE_URLS=( ${COMPOSE_URLS:-${DEFAULT_COMPOSE_URLS[@]}} )
 
-NF_PROJECT_ROOT="${NF_PROJECT_ROOT:-/var/www/NF-SafetyHub}"
+# NF-SafetyHub 仓库根目录：默认就是 docker离线部署/ 的上级目录（即仓库根本身）。
+# 调用方如果把 docker离线部署/ 单独拷出来，可显式传 NF_PROJECT_ROOT 指向真正的仓库根。
+NF_PROJECT_ROOT="${NF_PROJECT_ROOT:-${PROJECT_ROOT}}"
 NF_BUNDLE_OUTPUT_ROOT="${NF_PROJECT_ROOT}/内网离线部署包"
 
 log() { printf '[prepare] %s\n' "$*"; }
@@ -128,14 +136,16 @@ fi
 # 6. 整体打包
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 PKG_NAME="docker-offline-deploy_${TIMESTAMP}.tar.gz"
-# 把成品放到上级目录, 避免“边打包边写文件”导致 tar 警告
-PKG_OUT="$(dirname "${ROOT_DIR}")/${PKG_NAME}"
+# 成品默认放到 docker离线部署/部署文件/，避免“边打包边写文件”导致 tar 警告。
+# 该目录与 ROOT_DIR 在同一仓库下，但 tar 时通过 --exclude 排除掉，防止把刚生成的包再打进去。
+PKG_OUT="${PKG_OUTPUT_DIR}/${PKG_NAME}"
 
 log "打包整个离线部署目录 -> ${PKG_OUT}"
 tar -C "$(dirname "${ROOT_DIR}")" \
+    --exclude="$(basename "${ROOT_DIR}")/部署文件" \
     -czf "${PKG_OUT}" "$(basename "${ROOT_DIR}")"
 # 仅写入文件名（不含路径），保证拷贝到任意目录都能 sha256sum -c
-( cd "$(dirname "${PKG_OUT}")" && sha256sum "$(basename "${PKG_OUT}")" > "${PKG_NAME}.sha256" )
+( cd "${PKG_OUTPUT_DIR}" && sha256sum "${PKG_NAME}" > "${PKG_NAME}.sha256" )
 
 log "完成。请将以下两个文件拷贝到内网服务器:"
 log "  ${PKG_OUT}"

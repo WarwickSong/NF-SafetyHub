@@ -14,7 +14,7 @@ from config import settings
 from engine.models import AggregatedScanResult
 from middleware.identity import RequestIdentity, require_request_identity
 from proxy.fake_response import generate_fake_response
-from proxy.header_policy import build_upstream_headers
+from proxy.header_policy import build_upstream_headers, filter_response_headers
 from proxy.stream import SSEStreamProxy
 from proxy.upstream_router import UpstreamRouter, get_default_upstream_router
 from storage.archive import ArchivePayload, ArchiveWriter
@@ -128,6 +128,7 @@ async def _relay_to_upstream(
         timeout = httpx.Timeout(connect=route.timeout_connect, read=route.timeout_read, write=route.timeout_connect, pool=settings.upstream_timeout_pool)
         client = httpx.AsyncClient(timeout=timeout)
         client_owner = True
+    relay_body, relay_raw_body = _select_relay_payload(request.method, body, raw_body, action_taken)
     if is_stream and request.method in JSON_BODY_METHODS and isinstance(body, dict):
         stream = _stream_with_archive(
             client,
@@ -135,22 +136,31 @@ async def _relay_to_upstream(
             request.method,
             url,
             headers,
-            body,
+            relay_body,
+            relay_raw_body,
             request,
             original_body,
             scan_result,
             action_taken,
             started_at,
             identity,
-        ) if path == CHAT_COMPLETIONS_PATH else _stream_with_client_close(client, client_owner, request.method, url, headers, body)
+        ) if path == CHAT_COMPLETIONS_PATH else _stream_with_client_close(
+            client,
+            client_owner,
+            request.method,
+            url,
+            headers,
+            relay_body,
+            relay_raw_body,
+        )
         return StreamingResponse(stream, media_type="text/event-stream")
     try:
         request_kwargs: dict[str, Any] = {"headers": headers}
         if request.method in JSON_BODY_METHODS:
-            if body is not None:
-                request_kwargs["json"] = body
-            elif raw_body:
-                request_kwargs["content"] = raw_body
+            if relay_raw_body is not None:
+                request_kwargs["content"] = relay_raw_body
+            elif relay_body is not None:
+                request_kwargs["json"] = relay_body
         try:
             upstream_response = await client.request(request.method, url, **request_kwargs)
         except httpx.PoolTimeout as exc:
@@ -165,16 +175,43 @@ async def _relay_to_upstream(
             await client.aclose()
 
 
+def _select_relay_payload(
+    method: str,
+    body: Any,
+    raw_body: bytes,
+    action_taken: str,
+) -> tuple[Any, bytes | None]:
+    """决定转发上游时使用脱敏后的 dict 还是原始字节。
+
+    - 脱敏分支：用 dict 让 httpx 重新序列化，确保上游收到脱敏后的字节。
+    - 其它分支：优先透传 raw_body，保留客户端字节形态。
+
+    Returns:
+        二元组 (body_for_json, raw_body_for_content)；任一非 None 表示采用对应字段。
+    """
+
+    if method not in JSON_BODY_METHODS:
+        return None, None
+    if action_taken == "desensitized" and isinstance(body, dict):
+        return body, None
+    if raw_body:
+        return None, raw_body
+    if body is not None:
+        return body, None
+    return None, None
+
+
 async def _stream_with_client_close(
     client: httpx.AsyncClient,
     client_owner: bool,
     method: str,
     url: str,
     headers: dict[str, str],
-    body: dict[str, Any],
+    body: Any,
+    raw_body: bytes | None,
 ):
     try:
-        async for chunk in SSEStreamProxy.proxy_stream(client, method, url, headers, body):
+        async for chunk in SSEStreamProxy.proxy_stream(client, method, url, headers, body, raw_body):
             yield chunk
     finally:
         if client_owner:
@@ -187,7 +224,8 @@ async def _stream_with_archive(
     method: str,
     url: str,
     headers: dict[str, str],
-    body: dict[str, Any],
+    body: Any,
+    raw_body: bytes | None,
     request: Request,
     original_body: Any,
     scan_result: AggregatedScanResult | None,
@@ -196,18 +234,19 @@ async def _stream_with_archive(
     identity: RequestIdentity | None = None,
 ):
     collector = StreamArchiveCollector(settings.stream_archive_max_bytes)
+    archive_body = body if isinstance(body, dict) else original_body
     try:
-        async for chunk in SSEStreamProxy.proxy_stream(client, method, url, headers, body):
+        async for chunk in SSEStreamProxy.proxy_stream(client, method, url, headers, body, raw_body):
             collector.add(chunk)
             yield chunk
     finally:
         if client_owner:
             await client.aclose()
-        _write_chat_archive(request, original_body, body, collector.payload(), scan_result, action_taken, True, started_at, identity)
+        _write_chat_archive(request, original_body, archive_body, collector.payload(), scan_result, action_taken, True, started_at, identity)
 
 
 def _build_response(upstream_response: httpx.Response) -> Response:
-    headers = _filter_response_headers(upstream_response.headers)
+    headers = filter_response_headers(upstream_response.headers)
     return Response(
         content=upstream_response.content,
         status_code=upstream_response.status_code,
@@ -224,8 +263,7 @@ def _build_upstream_error_response(exc: httpx.HTTPError, status_code: int, detai
 
 
 def _filter_response_headers(headers: httpx.Headers) -> dict[str, str]:
-    blocked = {"content-length", "transfer-encoding", "connection", "content-encoding"}
-    return {name: value for name, value in headers.items() if name.lower() not in blocked}
+    return filter_response_headers(headers)
 
 
 def _action_from_scan_result(scan_result: AggregatedScanResult | None, was_desensitized: bool = False) -> str:
@@ -495,14 +533,18 @@ async def _read_request_body(request: Request, path: str) -> tuple[Any, bytes]:
     if not raw_body:
         return None, raw_body
     content_type = request.headers.get("content-type", "")
-    should_parse_json = path in KNOWN_JSON_ENDPOINTS or "application/json" in content_type.lower()
+    is_known_endpoint = path in KNOWN_JSON_ENDPOINTS
+    should_parse_json = is_known_endpoint or "application/json" in content_type.lower()
     if not should_parse_json:
         return None, raw_body
     try:
         body = await request.json()
     except Exception as exc:
-        raise HTTPException(status_code=400, detail="invalid json body") from exc
-    if path in KNOWN_JSON_ENDPOINTS and not isinstance(body, dict):
+        if is_known_endpoint:
+            raise HTTPException(status_code=400, detail="invalid json body") from exc
+        # 未知 JSON 端点解析失败时降级为字节透传，避免拒绝合法但非严格 JSON 的请求。
+        return None, raw_body
+    if is_known_endpoint and not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="json body must be an object")
     return body, raw_body
 

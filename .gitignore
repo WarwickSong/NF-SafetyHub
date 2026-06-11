@@ -12,6 +12,7 @@ logs/
 *.tar
 *.tar.gz
 nginx/ssl/
+nginx/certs/
 .DS_Store
 .idea/
 .vscode/

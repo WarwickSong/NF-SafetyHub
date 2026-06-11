@@ -151,7 +151,7 @@ UPSTREAM_URL=https://yxai-api.nanfu.com
 ADMIN_PASSWORD=至少12位强密码
 ```
 
-阶段 6A 单实例生产高并发治理建议补充，默认按 100 名员工同时使用 OpenClaw/Hermes/批量标注 Agent 的峰值生产场景规划：
+阶段 6A 单实例生产高并发治理建议补充，默认按 100 名员工同时使用 OpenClaw/Hermes/批量标注 Agent 的峰值生产场景规划。注意：代码默认值为每 worker `V1_MAX_INFLIGHT=150`、`V1_MAX_QUEUE_SIZE=200`、`UPSTREAM_MAX_KEEPALIVE_CONNECTIONS=150`；为达到 4 worker 容器总目标 1000 in-flight + 2000 排队，请在 `.env` 中显式设置如下生产推荐值：
 
 ```text
 UVICORN_WORKERS=4
@@ -402,7 +402,7 @@ Invoke-WebRequest -Uri http://127.0.0.1:8000/v1/chat/completions -Method Post -C
 python scripts\import_yxai_keys.py
 ```
 
-预期：脚本可从 `d:\Code\public\中转站\LLM-relay\yxai_token_export.json` 幂等导入，重复执行不会新增重复记录，只更新已有 `oneapi_nanfu_yxai` 记录。
+预期：脚本默认从仓库根目录 `./yxai_token_export.json` 幂等导入，可通过 `python scripts/import_yxai_keys.py --input <路径>` 指定其它位置；重复执行不会新增重复记录，只更新已有 `oneapi_nanfu_yxai` 记录。
 
 ### 7.7 编码验证
 
@@ -442,7 +442,9 @@ $body
 - Embeddings 透明透传，即使包含敏感词也不拦截；
 - `GET /v1/models` 透明透传与查询参数保留；
 - 未知 `/v1/*` JSON POST 默认透明透传，即使包含敏感词也不拦截；
-- 非法 JSON 请求。
+- 非严格 JSON 在 `KNOWN_JSON_ENDPOINTS`（chat/embeddings/completions/responses/images/*）返回 400，在其它未知端点降级为 `content=raw_body` 字节透传；
+- 未脱敏请求转发上游时使用 `content=raw_body` 字节透传（保留客户端原始 key 顺序、空白、`ensure_ascii=false` 等），脱敏请求才使用 `json=body` 重序列化；
+- 响应头通过 `filter_response_headers` 剥离 hop-by-hop / `Content-Length` / `Content-Encoding`，与 httpx 自动解压后的明文 body 保持一致。
 
 ### 8.2 本地 block 拦截验证
 
@@ -504,6 +506,26 @@ Invoke-RestMethod -Uri http://127.0.0.1:8000/v1/custom/action -Method Post -Cont
 ```
 
 预期：即使 prompt 中包含敏感词，也透明透传到上游对应 `/v1/custom/action`；使用占位 token 时通常返回上游 `401`、`403` 或上游自身的 404。
+
+非严格 JSON 在未知端点降级字节透传（2026-06 透明中继兼容性修复）：
+
+```bash
+curl -i -X POST http://127.0.0.1:8000/v1/custom/action \
+  -H "Authorization: Bearer placeholder-token" \
+  -H "Content-Type: application/json" \
+  --data-binary $'{\n  "payload": {\n    "prompt": "demo",\n    /* trailing comment */\n  }\n}'
+```
+
+预期：
+
+- 该 body 不是严格 JSON（含尾逗号 / 行内注释），由于路径不在 `KNOWN_JSON_ENDPOINTS`，SafetyHub 不再返回 400，而是把原始字节直接透传给上游；
+- 同样的 body 发到 `/v1/chat/completions` 或 `/v1/embeddings` 应仍然返回 400 `invalid json body`，以保证扫描 / 归档需要的 dict 结构。
+
+未脱敏请求字节透传验证（手工，需要抓包配合）：
+
+- 客户端发送一个带 `tool_calls` 或非默认 key 顺序的 chat 请求，body 里**不含**手机号；
+- 在上游侧抓包确认收到的 body 与客户端发的 body **byte-for-byte 一致**（含原始 key 顺序、空白、`ensure_ascii=false` 等）；
+- 若 body 中含手机号，则上游收到的应是脱敏后 `138****5678` 格式（此时允许 SafetyHub 重序列化后字节布局变化）。
 
 ---
 

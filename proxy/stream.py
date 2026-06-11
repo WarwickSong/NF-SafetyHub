@@ -11,10 +11,16 @@ class SSEStreamProxy:
         method: str,
         url: str,
         headers: dict[str, str],
-        body: dict,
+        body: dict | None = None,
+        raw_body: bytes | None = None,
     ) -> AsyncGenerator[bytes, None]:
+        request_kwargs: dict = {"headers": headers}
+        if raw_body is not None:
+            request_kwargs["content"] = raw_body
+        elif body is not None:
+            request_kwargs["json"] = body
         try:
-            async with client.stream(method, url, json=body, headers=headers) as upstream:
+            async with client.stream(method, url, **request_kwargs) as upstream:
                 if upstream.status_code >= 400:
                     content = await upstream.aread()
                     yield _build_error_event(upstream.status_code, content, upstream.headers.get("content-type"))
@@ -35,10 +41,11 @@ class SSEStreamProxy:
         method: str,
         url: str,
         headers: dict[str, str],
-        body: dict,
+        body: dict | None = None,
+        raw_body: bytes | None = None,
     ) -> AsyncGenerator[tuple[bytes | None, str | None], None]:
         chunks: list[bytes] = []
-        async for chunk in SSEStreamProxy.proxy_stream(client, method, url, headers, body):
+        async for chunk in SSEStreamProxy.proxy_stream(client, method, url, headers, body, raw_body):
             chunks.append(chunk)
             yield chunk, None
         yield None, b"".join(chunks).decode("utf-8", errors="replace")
