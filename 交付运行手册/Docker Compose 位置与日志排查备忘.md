@@ -25,6 +25,7 @@ nginx/nginx.conf
 
 ```bash
 cd /opt/docker离线部署/app-bundle/_extracted/safetyhub_intranet_bundle_YYYYMMDD_HHMMSS/NF-SafetyHub
+cd /opt/docker离线部署/app-bundle/_extracted/*/NF-SafetyHub
 ```
 
 如果忘记目录，可以通过容器反查 Compose 工作目录：
@@ -287,10 +288,39 @@ client_body_buffer_size 8m;
 - `client_body_buffer_size` 是 Nginx 尽量放在内存里的请求体缓冲，不是越大越好，过大会按并发放大内存占用。
 - 如果未来需要传更大的原始文件，不建议继续无限增大 JSON 请求体，应优先走文件上传/对象存储/引用 URL 方案。
 
-## 十、关键结论
+## 十、CDN/外层网关处理
+
+如果内网服务器前面新增了 CDN、WAF、API 网关、负载均衡或公网 Nginx，且日志中反复出现：
+
+```text
+408 rt=300.xxx cl=50xxx rl=16384 ua="hertz"
+```
+
+应优先怀疑外层入口没有完整转发请求体。`rl=16384` 是 16KB 边界，常见于 CDN/WAF/代理对请求体分片、缓冲、审查或转发策略不兼容。
+
+建议让运维对 `/v1/` 路径单独配置：
+
+- 关闭 CDN 缓存、页面优化、智能压缩、Brotli、Gzip。
+- 关闭 WAF 请求体审查、Bot 防护、API 安全扫描，或把 `/v1/chat/completions` 加白。
+- 关闭请求体大小/分片限制，确认允许至少 `100MB` 请求体。
+- 禁用请求体缓冲/聚合策略，确保大 POST body 能持续转发到源站。
+- 延长源站读写超时到至少 `300s`。
+- 对 SSE 响应关闭响应缓冲，保留 `text/event-stream` 和 `Transfer-Encoding: chunked`。
+- 如果 CDN 不支持稳定代理 SSE + 大 POST body，应让 `/v1/` 走 DNS 直连源站或单独 API 域名，不经过 CDN。
+
+推荐的临时验证方式：
+
+```bash
+curl --resolve llm-safetyhub.nanfu.com:443:源站公网IP https://llm-safetyhub.nanfu.com/health/ready -i
+```
+
+如果绕过 CDN 后 Trae/OpenClaw 正常，问题就在 CDN/外层网关；如果绕过 CDN 仍异常，再继续看 Docker Nginx 和应用日志。
+
+## 十一、关键结论
 
 - Docker 部署不要优先看宿主机 `/var/log/nginx/*.log`，应看 `docker compose logs nginx`。
 - `run_prod.sh` 正常但 Docker 异常时，优先看 Docker Nginx 日志和 SafetyHub 应用日志。
 - SSE 响应流要关闭响应缓冲：`proxy_buffering off`。
+- Trae/OpenClaw 如果出现 `408`、`rt=300.xxx`、`rl=16384`、`cl≈50KB`，且近期新增 CDN，应优先排查 CDN/WAF/外层网关是否截断或缓冲请求体。
 - Trae/OpenClaw 如果出现 `408`、`urt=-`、`rl` 明显小于 `cl`，说明请求体没有完整进入 Nginx，应让 `/v1/` 使用 `proxy_request_buffering off` 更接近直连行为。
 - 如果看到 `499` 或 `ClientDisconnect`，重点排查客户端/外层网关是否主动断开请求。
