@@ -158,7 +158,8 @@ User-Agent
 | 现象 | 含义 |
 | --- | --- |
 | `200` 且响应大小正常 | 容器内 Nginx 和应用基本正常 |
-| `408` | 客户端请求体发送超时，常见于客户端/外层网关提前断开 |
+| `408` 且 `urt=-` | 请求还没转到应用，Nginx 在等待客户端请求体时超时 |
+| `408` 且 `rl` 明显小于 `cl` | 客户端声明了较大的 `Content-Length`，但实际只发送了部分请求体 |
 | `499` | 客户端主动断开连接 |
 | `502` | Nginx 连接后端应用失败或后端提前关闭 |
 | 应用日志出现 `ClientDisconnect` | 应用读取请求体时客户端已经断开 |
@@ -224,7 +225,7 @@ X-Accel-Buffering: no
 进入 Compose 工作目录后：
 
 ```bash
-docker compose exec nginx nginx -T | grep -E 'proxy_buffering|proxy_request_buffering|X-Accel-Buffering|log_format|client_body_timeout'
+docker compose exec nginx nginx -T | grep -E 'proxy_buffering|proxy_request_buffering|X-Accel-Buffering|log_format|client_max_body_size|client_body_buffer_size|client_body_timeout'
 ```
 
 查看容器内 Nginx 完整配置：
@@ -245,10 +246,51 @@ docker compose restart nginx
 docker compose restart safetyhub nginx
 ```
 
-## 九、关键结论
+## 九、Trae/OpenClaw 408 判读
+
+如果日志类似：
+
+```text
+POST /v1/chat/completions HTTP/1.1" 408 0 rt=120.013 urt=- cl=51599 rl=16384 ua="hertz"
+```
+
+含义是：
+
+- `cl=51599`：客户端声明请求体约 51KB。
+- `rl=16384`：Nginx 实际只收到约 16KB 请求数据。
+- `urt=-`：请求没有转发到 SafetyHub 应用。
+- `rt=120.013`：Nginx 等待请求体 120 秒后超时。
+- `ua="hertz"`：请求来自 Trae/OpenClaw 使用的客户端栈。
+
+这种情况下问题发生在“客户端到 Docker Nginx 的请求体发送阶段”，不是 FastAPI 处理阶段，也不是 SSE 响应返回阶段。
+
+对应处理原则：
+
+```nginx
+location /v1/ {
+    proxy_buffering off;
+    proxy_request_buffering off;
+    client_body_timeout 300s;
+}
+```
+
+`proxy_request_buffering off` 会让 Nginx 不再等待完整请求体落盘后才转发，而是更接近 `run_prod.sh` 直连 Uvicorn 的行为。
+
+多模态和长上下文请求建议同时确认：
+
+```nginx
+client_max_body_size 100m;
+client_body_buffer_size 8m;
+```
+
+- `client_max_body_size` 是允许的最大请求体大小，图片 base64、长上下文、工具调用参数都会计入。
+- `client_body_buffer_size` 是 Nginx 尽量放在内存里的请求体缓冲，不是越大越好，过大会按并发放大内存占用。
+- 如果未来需要传更大的原始文件，不建议继续无限增大 JSON 请求体，应优先走文件上传/对象存储/引用 URL 方案。
+
+## 十、关键结论
 
 - Docker 部署不要优先看宿主机 `/var/log/nginx/*.log`，应看 `docker compose logs nginx`。
 - `run_prod.sh` 正常但 Docker 异常时，优先看 Docker Nginx 日志和 SafetyHub 应用日志。
 - SSE 响应流要关闭响应缓冲：`proxy_buffering off`。
-- 请求体不属于 SSE 响应流，通常应保持 `proxy_request_buffering on`，让 Nginx 完整接收请求体后再转给应用。
-- 如果看到 `408` 或 `ClientDisconnect`，重点排查客户端/外层网关是否提前断开请求。
+- Trae/OpenClaw 如果出现 `408`、`urt=-`、`rl` 明显小于 `cl`，说明请求体没有完整进入 Nginx，应让 `/v1/` 使用 `proxy_request_buffering off` 更接近直连行为。
+- 如果看到 `499` 或 `ClientDisconnect`，重点排查客户端/外层网关是否主动断开请求。
