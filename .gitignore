@@ -6,11 +6,13 @@ __pycache__/
 .venv/
 venv/
 .env
-data/
 logs/
 *.db
 *.sqlite
+*.tar
+*.tar.gz
 nginx/ssl/
+nginx/certs/
 .DS_Store
 .idea/
 .vscode/

@@ -1,3 +1,225 @@
-version: "0.1.0"
-keyword_rules: []
-regex_rules: []
+version: "0.2.0"
+keyword_rules:
+  - id: "KW-CONFIDENTIAL-1"
+    name: "极保守-公司机密"
+    keywords: ["告诉你一个公司机密"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: true
+    description: "阶段 2 极保守关键词拦截"
+  - id: "KW-CONFIDENTIAL-2"
+    name: "极保守-保密协议内容"
+    keywords: ["保密协议内容"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: true
+    description: "阶段 2 极保守关键词拦截"
+  - id: "KW-CONFIDENTIAL-3"
+    name: "极保守-绝密文件"
+    keywords: ["这是绝密文件"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: true
+    description: "阶段 2 极保守关键词拦截"
+  - id: "KW-CONFIDENTIAL-4"
+    name: "极保守-记住密钥"
+    keywords: ["请记住以下密钥"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: true
+    description: "阶段 2 极保守关键词拦截"
+  - id: "KW-CONFIDENTIAL-5"
+    name: "极保守-不要外传"
+    keywords: ["不要告诉别人"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: true
+    description: "阶段 2 极保守关键词拦截"
+  - id: "KW-EXPANSION-001"
+    name: "扩展-产品路线图"
+    keywords: ["产品路线图", "roadmap", "产品规划"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: false
+    description: "阶段 7 扩展规则预留"
+  - id: "KW-EXPANSION-002"
+    name: "扩展-密码明文"
+    keywords: ["password=", "passwd=", "密码是"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: false
+    description: "阶段 7 扩展规则预留"
+  - id: "KW-EXPANSION-003"
+    name: "扩展-访问令牌"
+    keywords: ["access_token", "refresh_token", "bearer token"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: false
+    description: "阶段 7 扩展规则预留"
+  - id: "KW-EXPANSION-004"
+    name: "扩展-内网地址"
+    keywords: ["内网地址", "internal endpoint", "intranet"]
+    level: "warn"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: false
+    description: "阶段 7 扩展规则预留"
+  - id: "KW-EXPANSION-005"
+    name: "扩展-客户名单"
+    keywords: ["客户名单", "客户清单", "客户列表"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: false
+    description: "阶段 7 扩展规则预留"
+  - id: "KW-EXPANSION-006"
+    name: "扩展-报价策略"
+    keywords: ["报价策略", "底价", "投标底价"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: false
+    description: "阶段 7 扩展规则预留"
+  - id: "KW-EXPANSION-007"
+    name: "扩展-源代码泄露"
+    keywords: ["源码仓库", "source code", "gitlab token"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: false
+    description: "阶段 7 扩展规则预留"
+  - id: "KW-EXPANSION-008"
+    name: "扩展-财报草稿"
+    keywords: ["财报草稿", "未披露财报", "利润预测"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: false
+    description: "阶段 7 扩展规则预留"
+  - id: "KW-EXPANSION-009"
+    name: "扩展-薪酬"
+    keywords: ["薪酬表", "工资单", "绩效评级"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: false
+    description: "阶段 7 扩展规则预留"
+  - id: "KW-EXPANSION-010"
+    name: "扩展-合同条款"
+    keywords: ["保密协议", "合同底稿", "违约条款"]
+    level: "warn"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: false
+    description: "阶段 7 扩展规则预留"
+  - id: "KW-EXPANSION-011"
+    name: "扩展-漏洞细节"
+    keywords: ["漏洞利用", "exploit", "0day"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: false
+    description: "阶段 7 扩展规则预留"
+  - id: "KW-EXPANSION-012"
+    name: "扩展-数据库连接"
+    keywords: ["数据库密码", "jdbc:", "mongodb://"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: false
+    description: "阶段 7 扩展规则预留"
+  - id: "KW-EXPANSION-013"
+    name: "扩展-云资源密钥"
+    keywords: ["secret_access_key", "aws_secret", "aliyun_secret"]
+    level: "block"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: false
+    description: "阶段 7 扩展规则预留"
+  - id: "KW-EXPANSION-014"
+    name: "扩展-组织架构"
+    keywords: ["组织架构", "汇报关系", "人员编制"]
+    level: "warn"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: false
+    description: "阶段 7 扩展规则预留"
+  - id: "KW-EXPANSION-015"
+    name: "扩展-会议纪要"
+    keywords: ["高管会议纪要", "董事会纪要", "战略会议"]
+    level: "warn"
+    match_mode: "contains"
+    case_sensitive: false
+    enabled: false
+    description: "阶段 7 扩展规则预留"
+regex_rules:
+  - id: "RG-PHONE-CN"
+    name: "PII-中国手机号"
+    pattern: "(?<!\\d)1[3-9]\\d{9}(?!\\d)"
+    level: "desensitize"
+    enabled: true
+    replacement: "phone"
+    description: "阶段 2 中国大陆手机号脱敏"
+  - id: "RG-PHONE-INTL"
+    name: "PII-国际电话"
+    pattern: "(?<!\\d)\\+?[1-9]\\d{0,2}[ -]?(?:\\d[ -]?){7,14}\\d(?!\\d)"
+    level: "desensitize"
+    enabled: true
+    replacement: "phone"
+    description: "阶段 2 国际电话格式脱敏"
+  - id: "RG-EXPANSION-001"
+    name: "扩展-身份证号"
+    pattern: "(?<!\\d)[1-9]\\d{5}(?:19|20)\\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\\d|3[01])\\d{3}[\\dXx](?!\\w)"
+    level: "block"
+    enabled: false
+    description: "阶段 7 扩展规则预留"
+  - id: "RG-EXPANSION-002"
+    name: "扩展-OpenAI API Key"
+    pattern: "sk-[A-Za-z0-9_-]{20,}"
+    level: "block"
+    enabled: false
+    description: "阶段 7 扩展规则预留"
+  - id: "RG-EXPANSION-003"
+    name: "扩展-邮箱地址"
+    pattern: "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"
+    level: "warn"
+    enabled: false
+    description: "阶段 7 扩展规则预留"
+  - id: "RG-EXPANSION-004"
+    name: "扩展-银行卡号"
+    pattern: "(?<!\\d)(?:\\d[ -]?){16,19}(?!\\d)"
+    level: "block"
+    enabled: false
+    description: "阶段 7 扩展规则预留"
+  - id: "RG-EXPANSION-005"
+    name: "扩展-内网 IPv4"
+    pattern: "(?<!\\d)(?:10|172\\.(?:1[6-9]|2\\d|3[01])|192\\.168)\\.(?:\\d{1,3}\\.){1}\\d{1,3}(?!\\d)"
+    level: "warn"
+    enabled: false
+    description: "阶段 7 扩展规则预留"
+  - id: "RG-EXPANSION-006"
+    name: "扩展-JWT"
+    pattern: "eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}"
+    level: "block"
+    enabled: false
+    description: "阶段 7 扩展规则预留"
+  - id: "RG-EXPANSION-007"
+    name: "扩展-AWS Access Key"
+    pattern: "AKIA[0-9A-Z]{16}"
+    level: "block"
+    enabled: false
+    description: "阶段 7 扩展规则预留"
+  - id: "RG-EXPANSION-008"
+    name: "扩展-私钥块"
+    pattern: "-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY-----"
+    level: "block"
+    enabled: false
+    description: "阶段 7 扩展规则预留"

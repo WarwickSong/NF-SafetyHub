@@ -1,4 +1,5 @@
 from functools import lru_cache
+import os
 from pathlib import Path
 
 from pydantic import Field, field_validator
@@ -13,7 +14,19 @@ class Settings(BaseSettings):
     upstream_url: str = ""
     upstream_timeout_connect: int = 10
     upstream_timeout_read: int = 120
-    upstream_route_config_path: Path = Path("config/upstream_routes.yaml")
+    upstream_timeout_pool: int = 5
+    upstream_max_connections: int = 200
+    upstream_max_keepalive_connections: int = 150
+    upstream_keepalive_expiry: int = 30
+
+    v1_max_inflight: int = 150
+    v1_max_queue_size: int = 200
+    v1_queue_timeout_seconds: float = 15
+    admin_stats_cache_seconds: int = 10
+    archive_queue_max_size: int = 5000
+    archive_batch_size: int = 50
+    archive_flush_interval_seconds: float = 1
+    archive_max_payload_bytes: int = 262144
 
     rules_config_path: Path = Path("engine/rules_config.yaml")
     rules_reload_interval: int = 5
@@ -22,8 +35,29 @@ class Settings(BaseSettings):
     db_url: str = "sqlite+aiosqlite:///./data/safetyhub.db"
     archive_retention_days: int = 180
     audit_retention_days: int = 365
+    system_disk_monitor_path: Path = Path("/")
+    system_disk_monitor_container_path: Path = Path("/mnt/system-disk")
+    data_disk_monitor_path: Path = Path("data")
+    image_asset_dir: Path = Path("data/image_assets")
+    image_asset_max_size_mb: int = 20
+    image_asset_download_timeout_seconds: int = 10
     data_encryption_enabled: bool = False
     data_encryption_key_env: str = "SAFETYHUB_DATA_KEY"
+    allow_empty_api_keys_passthrough: bool = True
+    stream_archive_max_bytes: int = 1024 * 1024
+    key_provider_type: str = "passthrough"
+    key_provider_admin_token: str = ""
+    key_provider_base_url: str = ""
+    key_provider_username: str = ""
+    key_provider_password_env: str = "KEY_PROVIDER_PASSWORD"
+    key_provider_auth_version: str = ""
+    key_provider_default_remain_quota: int = 1000000
+    key_provider_default_unlimited_quota: bool = True
+    key_provider_timeout_seconds: int = 30
+    key_provider_login_retries: int = 3
+    key_provider_login_retry_delay_seconds: float = 10
+    key_provider_request_retries: int = 3
+    key_provider_request_retry_delay_seconds: float = 2
 
     admin_username: str = "admin"
     admin_password: str = ""
@@ -62,6 +96,28 @@ class Settings(BaseSettings):
     def is_production(self) -> bool:
         return self.environment == "production"
 
+    def get_secret(self, env_name: str) -> str:
+        value = os.getenv(env_name, "")
+        if value:
+            return value
+        env_file = self.model_config.get("env_file")
+        if not env_file:
+            return ""
+        configured_path = Path(str(env_file))
+        env_paths = [configured_path] if configured_path.is_absolute() else [Path.cwd() / configured_path, Path(__file__).resolve().parent / configured_path]
+        for env_path in dict.fromkeys(env_paths):
+            if not env_path.exists():
+                continue
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#") or "=" not in stripped:
+                    continue
+                key, raw_value = stripped.split("=", 1)
+                if key.strip() != env_name:
+                    continue
+                return raw_value.strip().strip('"').strip("'")
+        return ""
+
 
 def validate_startup_settings(settings: Settings) -> None:
     if not settings.is_production:
@@ -71,6 +127,19 @@ def validate_startup_settings(settings: Settings) -> None:
         missing.append("UPSTREAM_URL")
     if len(settings.admin_password) < 12:
         missing.append("ADMIN_PASSWORD")
+    if not settings.get_secret(settings.data_encryption_key_env):
+        missing.append(settings.data_encryption_key_env)
+    if settings.allow_empty_api_keys_passthrough:
+        missing.append("ALLOW_EMPTY_API_KEYS_PASSTHROUGH=false")
+    if settings.key_provider_type == "oneapi_nanfu_yxai":
+        if not settings.key_provider_base_url:
+            missing.append("KEY_PROVIDER_BASE_URL")
+        if not settings.key_provider_username:
+            missing.append("KEY_PROVIDER_USERNAME")
+        if not settings.get_secret(settings.key_provider_password_env):
+            missing.append(settings.key_provider_password_env)
+        if not settings.key_provider_auth_version:
+            missing.append("KEY_PROVIDER_AUTH_VERSION")
     if missing:
         raise RuntimeError(f"Missing or unsafe production settings: {', '.join(missing)}")
 
