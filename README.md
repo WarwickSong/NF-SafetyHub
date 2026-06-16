@@ -1,56 +1,65 @@
 # LLM-SafetyHub
 
-LLM 对话安全代理层 —— 部署在用户客户端与大模型中转站之间，对对话内容进行实时安全检测、拦截与归档。
+LLM 对话安全代理层，部署在用户客户端与大模型中转站之间，提供 OpenAI-compatible `/v1/*` 透明中继、请求侧安全检测、拦截伪装、归档审计、APIKey 治理和单实例 Docker 生产稳定性保护。
+
+当前阶段：**阶段 6A — 单实例 Docker 生产稳定性与高并发治理**。阶段 1~6 核心能力已落地，阶段 6A 工程能力已落地并进入生产压测、真实上游联调和运维验收阶段；阶段 7 及之后能力暂不开发，仅保留长期规划。
 
 ## 功能概览
 
 | 能力 | 说明 | 状态 |
 |------|------|------|
-| 透明中继 | 兼容 OpenAI API 格式，对客户端和中转站完全透明，支持流式/非流式 | 阶段 1 开发中 |
-| 安全检测 | 关键词匹配 + 正则规则，命中时拦截请求并伪装为大模型正常回复 | 阶段 1 开发中 |
-| 消息归档 | 全量记录 prompt 和 response，支持按用户/模型/时间查询 | 数据模型已就绪 |
-| 审计追溯 | 拦截事件独立记录，含规则、匹配片段、执行动作 | 数据模型已就绪 |
-| 实时告警 | 拦截事件推送至企业微信/飞书，支持静默与限流 | 阶段 2 规划中 |
-| 管理后台 | Web 仪表盘：拦截记录、消息归档、规则管理、系统设置 | 阶段 2 规划中 |
-| 治理预留 | APIKey 权限、模型访问策略、临时审批流程 | 数据结构已预留 |
-| 文件安全 | 上传文件解析、检测、脱敏 | 阶段 3 规划中 |
+| 透明中继 | 兼容 OpenAI API `/v1/*`，支持 Chat、Embeddings、Completions、Responses、Images、未知端点和 `GET /v1/models` 默认透传 | ✅ 已完成 |
+| 字节级透传 | 未脱敏路径使用原始 `raw_body` 转发，保留 JSON key 顺序、空白、编码和非严格未知端点兼容性 | ✅ 已完成 |
+| 安全检测 | 关键词 + 正则扫描；Chat 默认扫描最新允许 role 的文本消息；手机号请求侧脱敏，保守关键词 block | ✅ 已完成 |
+| 伪装回复 | 命中 block 规则时返回 OpenAI Chat Completions 兼容伪装回复，不触达上游 | ✅ 已完成 |
+| 消息归档 | Chat 非流式/流式 prompt 与 response 归档，保留原始 prompt 与脱敏后 prompt | ✅ 已完成 |
+| 图片资产归档 | 文生图元数据归档，URL / b64 图片本体异步归档并记录状态 | ✅ 已完成 |
+| 审计追溯 | block / desensitize 命中事件写入审计日志，支持后台分页筛选和详情查看 | ✅ 已完成 |
+| 管理后台 | 静态 HTML + 原生 JS 后台，支持登录、仪表盘、归档、审计、观测、规则、APIKey、运行状态 | ✅ 已完成 |
+| APIKey 治理 | K-Sync 默认、加密存储、有效性校验、上游 Key 替换、reveal、吊销、CSV 批量替换 | ✅ 已完成 |
+| KeyProvider | 支持 `passthrough`、`static`、`oneapi_nanfu_yxai` Provider 创建、获取完整 Key 和吊销 | ✅ 核心能力已完成 |
+| 高并发治理 | `/v1/*` 有界并发队列、排队超时、队列满 429、共享上游连接池、归档队列削峰、后台统计缓存 | 🔄 工程能力已落地，待生产压测验收 |
+| 实时告警 | Webhook 告警、告警限流、审计导出 | ⏸️ 阶段 8 长期规划 |
+| 文件安全 | 文件解析、扫描、脱敏、文件安全后台 | ⏸️ 阶段 10 长期规划 |
 
 ## 架构
 
-```
-┌──────────┐     ┌──────────────────────────────────────┐     ┌──────────┐
-│          │     │           LLM-SafetyHub              │     │          │
-│  客户端   │────→│  中继转发 → 安全检测 → 伪装回复/放行  │────→│  中转站   │
-│          │     │         ↓ 归档  ↓ 审计  ↓ 告警        │     │          │
-└──────────┘     └──────────────────────────────────────┘     └──────────┘
+```text
+┌──────────┐     ┌──────────────────────────────────────────────────────────────┐     ┌──────────┐
+│          │     │                       LLM-SafetyHub                         │     │          │
+│  客户端   │────→│  /v1 中继 → 身份/APIKey → 安全检测 → 脱敏/伪装/透传 → 归档审计  │────→│  中转站   │
+│          │     │      ↑ 并发队列 / 请求体限制 / 共享连接池 / 后台队列削峰        │     │          │
+└──────────┘     └──────────────────────────────────────────────────────────────┘     └──────────┘
 ```
 
 ## 项目结构
 
-```
-safetyhub/
-├── main.py                  # FastAPI 应用入口
-├── config.py                # 配置加载（pydantic-settings）
-├── dependencies.py          # FastAPI 依赖注入
-├── proxy/                   # 中继转发与伪装回复
-├── engine/                  # 安全扫描引擎（关键词 + 正则）
-│   └── rules_config.yaml    # 规则配置文件
-├── governance/              # APIKey 权限、模型策略、审批（预留）
-├── file_security/           # 文件安全检测（预留）
-├── observability/           # 健康检查、请求追踪
-├── storage/                 # 数据持久化（SQLAlchemy Async + SQLite）
-│   ├── database.py
-│   ├── models.py            # ORM 模型：消息归档、审计日志、管理员操作
-│   └── migrations/
-├── admin/                   # 管理后台（静态前端）
-├── notify/                  # 告警通知（预留）
-├── middleware/              # 中间件（预留）
-├── nginx/                   # Nginx 反向代理配置
-├── scripts/                 # 运维脚本
-├── tests/                   # 测试
+```text
+NF-SafetyHub/
+├── main.py                    # FastAPI 应用入口、生命周期、共享资源初始化
+├── config.py                  # pydantic-settings 配置和生产启动校验
+├── proxy/                     # OpenAI-compatible 中继、Header 策略、SSE 流式、伪装回复
+├── engine/                    # 关键词/正则扫描、规则配置、调度引擎
+├── governance/                # APIKey 服务、KeyProvider 抽象与 Provider 实现
+├── middleware/                # 管理认证、APIKey 身份、请求体限制、/v1 并发队列
+├── runtime/                   # 上游共享 HTTP client、归档队列、后台统计缓存
+├── storage/                   # SQLAlchemy Async 模型、数据库、归档、审计、图片资产
+├── admin/                     # 管理 API 与静态后台页面
+├── observability/             # 健康检查、Request ID
+├── file_security/             # 文件安全长期规划占位
+├── notify/                    # 告警通知长期规划占位
+├── nginx/                     # Nginx 反向代理配置
+├── scripts/                   # 初始化、迁移、导入、验证脚本
+├── tests/                     # 自动化测试
+├── verify/                    # 手动联调脚本
+├── 交付运行手册/              # 生产/内网部署说明与脚本
+├── 产品研发控制/              # 研发规划、进展、测试验证文档
+├── docker离线部署/            # Docker 离线部署包制作脚本与材料
 ├── Dockerfile
 ├── docker-compose.yml
-└── Makefile
+├── Makefile
+├── requirements.txt
+└── pytest.ini
 ```
 
 ## 快速开始
@@ -58,50 +67,78 @@ safetyhub/
 ### 环境要求
 
 - Python 3.12+
-- Docker & Docker Compose（可选，用于容器化部署）
+- Docker & Docker Compose（生产/容器化部署推荐）
+- PostgreSQL（生产推荐，`docker-compose.yml` 已包含 PostgreSQL 服务）
 
 ### 本地运行
 
 ```bash
-# 1. 克隆仓库
-git clone https://github.com/你的用户名/NF-SafetyHub.git
-cd NF-SafetyHub
-
-# 2. 创建虚拟环境并安装依赖
+# 1. 创建虚拟环境并安装依赖
 python -m venv .venv
+
 # Windows
 .\.venv\Scripts\activate
+
 # Linux/macOS
 source .venv/bin/activate
 
 pip install -r requirements.txt
 
-# 3. 复制环境配置
+# 2. 复制环境配置
 cp .env.example .env
-# 编辑 .env，至少填写 UPSTREAM_URL（中转站地址）
 
-# 4. 启动服务
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+# 3. 编辑 .env，至少设置开发联调所需配置
+# UPSTREAM_URL=<中转站地址>
+# ADMIN_PASSWORD=<管理员密码>
+
+# 4. 启动开发服务
+uvicorn main:app --host 0.0.0.0 --port 8000
 
 # 5. 验证
 curl http://localhost:8000/health/live
-# 返回 {"status":"ok"}
+curl http://localhost:8000/health/ready
 ```
+
+开发环境可使用 SQLite 默认配置；生产环境必须按生产安全要求设置 `ENVIRONMENT=production`、`ADMIN_PASSWORD`、`SAFETYHUB_DATA_KEY`、`UPSTREAM_URL`，并关闭空 APIKey 透传。
 
 ### Docker 部署
 
 ```bash
-# 复制环境配置并编辑
-cp .env.example .env
+# 1. 复制并编辑生产配置
+cp 交付运行手册/.env.production.example .env
 
-# 启动
-docker compose up --build
+# 2. 启动 PostgreSQL + SafetyHub + Nginx
+docker compose up --build -d
 
-# 验证
-curl http://localhost:8000/health/live
+# 3. 验证
+curl http://127.0.0.1/health/live
+curl http://127.0.0.1/health/ready
 ```
 
-### 离线部署包打包
+Dockerfile 使用多 worker 生产启动命令：`uvicorn main:app --workers ${UVICORN_WORKERS:-4}`，不使用 `--reload`。
+
+## 阶段 6A 生产配置建议
+
+阶段 6A 当前按单实例 Docker、4 worker 生产场景设计，目标覆盖容器总 `1000` in-flight + `2000` 排队。若 worker 数变化，需要同步折算每 worker 配置。
+
+```text
+UVICORN_WORKERS=4
+V1_MAX_INFLIGHT=250
+V1_MAX_QUEUE_SIZE=500
+V1_QUEUE_TIMEOUT_SECONDS=15
+UPSTREAM_MAX_CONNECTIONS=200
+UPSTREAM_MAX_KEEPALIVE_CONNECTIONS=100
+UPSTREAM_TIMEOUT_POOL=5
+ADMIN_STATS_CACHE_SECONDS=10
+ARCHIVE_QUEUE_MAX_SIZE=5000
+ARCHIVE_BATCH_SIZE=50
+ARCHIVE_FLUSH_INTERVAL_SECONDS=1
+ARCHIVE_MAX_PAYLOAD_BYTES=262144
+```
+
+`/admin/*`、`/admin/api/*`、`/health/*` 不进入 `/v1/*` 并发队列，压测期间仍应持续验证管理端和健康检查可用性。
+
+## 离线部署包打包
 
 离线交付分两层打包：先生成 SafetyHub 应用与镜像 bundle，再生成包含 Docker、Docker Compose 和应用 bundle 的整体离线部署包。
 
@@ -117,7 +154,7 @@ bash docker离线部署/scripts/prepare-offline-package.sh
 
 注意：`prepare-offline-package.sh` 会同步 `内网离线部署包/` 下最新的 `safetyhub_intranet_bundle_*.tar.gz`，并校验关键部署文件是否与当前源码一致。如果修改过 `docker-compose.yml`、`nginx/nginx.conf` 或部署脚本，必须先重新执行 `build_intranet_offline_bundle.sh`，否则整体打包会提前失败，避免旧 bundle 被误打进离线包。
 
-### 常用命令
+## 常用命令
 
 ```bash
 make install      # 安装依赖
@@ -132,51 +169,98 @@ make docker-down  # Docker 停止
 
 所有配置通过 `.env` 文件或环境变量加载，完整配置项见 [.env.example](.env.example)。
 
-关键配置：
-
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `UPSTREAM_URL` | 中转站地址（生产环境必填） | 空 |
-| `DB_URL` | 数据库连接字符串 | `sqlite+aiosqlite:///./data/safetyhub.db` |
-| `ADMIN_PASSWORD` | 管理员密码（生产环境需 ≥12 位） | 空 |
+| `ENVIRONMENT` | 运行环境，生产设置为 `production` | `development` |
+| `UPSTREAM_URL` | 默认中转站地址，生产环境必填 | 空 |
+| `DB_URL` | 数据库连接字符串，生产推荐 PostgreSQL | `sqlite+aiosqlite:///./data/safetyhub.db` |
+| `ADMIN_PASSWORD` | 管理员密码，生产环境需 ≥12 位 | 空 |
+| `SAFETYHUB_DATA_KEY` | APIKey 加密密钥环境变量，生产环境必填 | 空 |
+| `ALLOW_EMPTY_API_KEYS_PASSTHROUGH` | APIKey 表为空时是否允许历史透传，生产应关闭 | `true` |
 | `RULES_CONFIG_PATH` | 规则配置文件路径 | `engine/rules_config.yaml` |
-| `WEBHOOK_URL` | 告警推送地址 | 空 |
-| `ENVIRONMENT` | 运行环境 `development` / `production` | `development` |
+| `KEY_PROVIDER_TYPE` | KeyProvider 类型：`passthrough` / `static` / `oneapi_nanfu_yxai` | `passthrough` |
+| `REQUEST_MAX_BODY_MB` | 请求体大小限制 | `20` |
+| `V1_MAX_INFLIGHT` | 每 worker `/v1/*` 最大在途请求数 | `150` |
+| `V1_MAX_QUEUE_SIZE` | 每 worker `/v1/*` 最大排队请求数 | `200` |
+| `ARCHIVE_QUEUE_MAX_SIZE` | 归档/审计后台队列上限 | `5000` |
 
-生产环境启动时会校验必要配置，缺失或弱密码会导致启动失败。
+生产环境启动时会校验关键配置，缺失或不安全配置会导致启动失败。
 
-## 健康检查
+## 主要接口
 
 | 端点 | 说明 |
 |------|------|
 | `GET /health/live` | 进程存活检查 |
 | `GET /health/ready` | 就绪检查（数据库 + 规则文件） |
+| `/v1/*` | OpenAI-compatible 通用代理入口 |
+| `GET /admin/` | 管理后台静态页面入口 |
+| `POST /admin/api/login` | 管理后台登录 |
+| `GET /admin/api/stats` | 后台统计概览，阶段 6A 支持短缓存 |
+| `GET /admin/api/runtime` | worker、并发队列、归档队列、上游连接池和磁盘状态快照 |
+| `GET /admin/api/archives` | 消息归档分页查询 |
+| `GET /admin/api/audits` | 审计日志分页查询 |
+| `GET /admin/api/observations/recent` | 最近少量完整 Chat 样本观测 |
+| `GET /admin/api/rules` | 规则列表 |
+| `PATCH /admin/api/rules/{id}` | 启停规则并触发热加载 |
+| `POST /admin/api/rules/reload` | 手动规则热加载 |
+| `GET /admin/api/api-keys` | APIKey 列表 |
+| `POST /admin/api/api-keys` | 手动或 Provider 创建 APIKey |
+| `POST /admin/api/api-keys/{id}/reveal` | 受审计 reveal 完整 SafetyHub Key |
+| `POST /admin/api/api-keys/{id}/replace-upstream-key` | 单条替换上游 Key |
+| `POST /admin/api/api-keys/bulk-replace-upstream-keys` | CSV 批量替换上游 Key |
+
+以下接口属于后续增强或阶段 8 规划，当前未实现：`GET /admin/api/settings`、`GET /admin/api/rules/top`、`GET /admin/api/audits/export`、`POST /admin/api/webhook/test`。
+
+## 测试与验证
+
+```bash
+python -m pytest
+```
+
+历史全量测试基线为 `94 passed`；当前生产代码已继续演进，最近一次本地复核为 `96 passed, 2 failed`，失败集中在 `tests/test_admin_auth.py` 的后台认证测试夹具未初始化 `message_archives` 表。该问题属于测试夹具与当前生产代码演进不同步，不影响生产应用生命周期内的数据库初始化；生产上线判断应结合专项测试、Docker/真实上游联调和压测验收。
+
+常用专项测试：
+
+```bash
+pytest tests/test_concurrency_limit.py
+pytest tests/test_api_keys.py
+pytest tests/test_image_assets.py tests/test_relay_image_assets.py tests/test_admin_image_assets.py
+pytest tests/test_relay.py tests/test_header_policy.py
+```
+
+更多验证方法见 `产品研发控制/SafetyHub测试验证指导.md`。
 
 ## 开发阶段
 
-| 阶段 | 内容 | 版本 | 状态 |
-|------|------|------|------|
-| 阶段 0 | 基础设施搭建 | v0.1 | ✅ 已完成 |
-| 阶段 1 | 核心安全链路（中继+检测+归档+伪装） | v0.5 | 🔧 进行中 |
-| 阶段 2 | 管理能力完善（后台+审计+告警） | v0.8 | 📋 规划中 |
-| 阶段 3 | 打磨上线（测试+部署加固） | v1.0 | 📋 规划中 |
-
-## 分支策略
-
-| 分支 | 用途 | 保护 |
+| 阶段 | 内容 | 状态 |
 |------|------|------|
-| `main` | 生产分支，仅接受来自 staging 的 PR | 受保护，需审核 |
-| `staging` | 验证分支，集成测试通过后合并到 main | 受保护，需审核 |
-| `dev` | 开发分支，日常开发合并目标 | 开放 push |
-| `feature/*` | 功能分支，从 dev 创建 | 开放 push |
+| 阶段 1 | 透传中继 + 健康检查 | ✅ 已完成 |
+| 阶段 2 | 弱扫描 MVP（手机号脱敏 + 保守关键词 block + 规则热加载） | ✅ 已完成 |
+| 阶段 3 | 归档 + 审计 + 文生图图片资产归档 | ✅ 已完成 |
+| 阶段 4 | 管理员认证 + 最小后台 | ✅ 已完成 |
+| 阶段 5 | APIKey 管理（K-Sync、加密、上游 Key 替换） | ✅ 已完成 |
+| 阶段 6 | KeyProvider 抽象 + 中转站联通 | ✅ 核心能力已完成 |
+| 阶段 6A | 单实例 Docker 生产稳定性与高并发治理 | 🔄 工程能力已落地，待生产压测验收 |
+| 阶段 7 | 扫描升级 | ⏸️ 暂不开发，仅保留规划 |
+| 阶段 8 | 可观测性增强 + 告警 | ⏸️ 暂不开发，仅保留规划 |
+| 阶段 9 | 临时审批 + 安全策略 + 审批链 | ⏸️ 暂不开发，仅保留规划 |
+| 阶段 10 | 远期能力（文件安全、NER、多上游、多租户等） | ⏸️ 暂不开发，仅保留规划 |
+
+## 当前边界
+
+- 真实 Docker 生产高并发阶梯压测、连接池观测、PostgreSQL 长时间运行、备份恢复和运维安全复核仍需生产环境验收。
+- 替换上游 Key 后不会自动触达上游验证新 Key，也不会自动回滚；如新 Key 错误，需要管理员再次替换。
+- 图片资产后台预览/下载页面、存储配额、保留策略和清理任务仍属阶段 8 规划。
+- Webhook 告警、审计导出、临时审批运行链路、文件安全、NER、多上游、多租户暂不开发。
 
 ## 技术栈
 
 - **Web 框架**：FastAPI + Uvicorn
-- **数据库**：SQLAlchemy (Async) + aiosqlite (SQLite)
+- **数据库**：SQLAlchemy Async + SQLite（开发默认）/ PostgreSQL（生产推荐）
 - **配置**：pydantic-settings
-- **HTTP 客户端**：httpx（用于上游中继）
-- **容器化**：Docker + Nginx
+- **HTTP 客户端**：httpx（共享上游连接池与流式中继）
+- **前端**：静态 HTML + 原生 JavaScript + CSS
+- **容器化**：Docker + Docker Compose + Nginx
 - **测试**：pytest + pytest-asyncio
 
 ## 许可证

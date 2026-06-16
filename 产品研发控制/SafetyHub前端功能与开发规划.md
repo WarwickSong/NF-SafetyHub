@@ -95,9 +95,9 @@ admin/static/
 | 接口 | 用途 |
 |------|------|
 | `GET /admin/api/stats` | 获取核心统计和趋势，阶段 6A 允许 5~15 秒短缓存 |
-| `GET /admin/api/runtime` | 获取阶段 6A 单实例运行状态，可合并到 stats 或 settings |
-| `GET /admin/api/health` | 获取管理端展示用健康状态 |
-| `GET /admin/api/rules/top` | 获取 Top 命中规则，可后续合并到 stats |
+| `GET /admin/api/runtime` | 获取阶段 6A 单实例运行状态，当前已接入仪表盘 |
+| `GET /admin/api/health` | 获取管理端展示用健康状态，当前已接入设置页 |
+| `GET /admin/api/rules/top` | 获取 Top 命中规则，阶段 8 或后续增强接口，当前未实现且前端未调用 |
 
 **验收标准**
 
@@ -125,7 +125,7 @@ admin/static/
 |------|------|
 | `GET /admin/api/audits` | 查询 block/warn 事件 |
 | `GET /admin/api/audits/{id}` | 查看事件详情 |
-| `GET /admin/api/audits/export` | 导出审计记录，阶段 8 启用 |
+| `GET /admin/api/audits/export` | 导出审计记录，阶段 8 启用；当前未实现且前端未调用 |
 
 **验收标准**
 
@@ -209,7 +209,7 @@ admin/static/
 |------|------|
 | `GET /admin/api/audits` | 安全审计列表 |
 | `GET /admin/api/admin-ops` | 管理员操作审计列表 |
-| `GET /admin/api/audits/export` | 安全审计导出，阶段 8 启用 |
+| `GET /admin/api/audits/export` | 安全审计导出，阶段 8 启用；当前未实现且前端未调用 |
 
 **验收标准**
 
@@ -266,9 +266,10 @@ admin/static/
 
 | 接口 | 用途 |
 |------|------|
-| `GET /admin/api/settings` | 获取脱敏后的系统配置 |
-| `GET /admin/api/health` | 获取健康状态 |
-| `POST /admin/api/webhook/test` | 测试 Webhook，阶段 8 启用 |
+| `GET /admin/api/health` | 获取健康状态，当前已实现并由设置页调用 |
+| `GET /admin/api/runtime` | 获取运行状态，当前已实现并由仪表盘调用 |
+| `GET /admin/api/settings` | 获取脱敏后的系统配置，后续增强接口，当前未实现且前端未调用 |
+| `POST /admin/api/webhook/test` | 测试 Webhook，阶段 8 启用，当前未实现 |
 
 **验收标准**
 
@@ -297,7 +298,7 @@ admin/static/
 
 | 显示内容 | 说明 |
 |---------|------|
-| 当前 Provider 类型 | 读取 `/admin/api/settings` 中的 `key_provider_type`（默认 `passthrough`） |
+| 当前 Provider 类型 | 阶段 4 占位期规划读取 `/admin/api/settings`；当前阶段 5/6 已升级为可操作 APIKey 页面，Provider 信息由 APIKey 列表、创建表单和后端配置共同承载 |
 | 字段定义说明 | 展示阶段 5 将启用的字段：`name`、`key_prefix`、`provider_name`、`upstream_key_prefix`、`is_decoupled`、`status`、`expires_at`；`model_allowlist`、`capability_allowlist` 已确认超出 SafetyHub 边界，不进入前端表单和 API 响应 |
 | 设计文档链接 | 跳转到《功能定义规划》F15 / F15.1.5 / F15.1.6 章节 |
 | 禁用按钮 | "新建 APIKey"、"替换上游 Key"、"批量导入"等按钮存在但 disabled，并标注"阶段 5 启用" |

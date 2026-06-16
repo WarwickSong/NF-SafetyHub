@@ -578,7 +578,7 @@ SafetyHub: 请求侧处理
 |------|------|------|
 | `/admin/api/audits` | GET | 分页查询，支持 user_id / rule_id / level / time_range 筛选 |
 | `/admin/api/audits/{id}` | GET | 单条审计详情 |
-| `/admin/api/audits/export` | GET | 导出 CSV/JSON，阶段 8 启用 |
+| `/admin/api/audits/export` | GET | 导出 CSV/JSON，阶段 8 启用；当前未实现 |
 
 **行为约束**
 
@@ -594,7 +594,7 @@ SafetyHub: 请求侧处理
 - [ ] 每次拦截/告警事件都有独立审计记录
 - [ ] 按用户、规则、级别、时间范围筛选结果正确
 - [ ] 审计记录无法被修改或删除
-- [ ] CSV 导出文件格式正确，可在 Excel 中打开
+- [ ] 阶段 8 启用后，CSV 导出文件格式正确，可在 Excel 中打开
 
 ---
 

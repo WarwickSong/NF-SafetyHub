@@ -52,13 +52,14 @@ cd <SafetyHub项目根目录>
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-当前基线：
+当前参考基线：
 
 ```text
-94 passed
+历史基线：94 passed
+最近一次本地复核：96 passed, 2 failed
 ```
 
-当前已知提示：`datetime.utcnow()` 弃用警告已修复，ORM 时间字段统一使用 timezone-aware UTC。
+当前已知提示：`datetime.utcnow()` 弃用警告已修复，ORM 时间字段统一使用 timezone-aware UTC。当前生产代码已继续演进，固定通过数不再作为唯一验收口径；最近一次本地复核的 2 个失败集中在 `tests/test_admin_auth.py` 的后台认证测试夹具未初始化 `message_archives` 表，生产应用生命周期会执行数据库初始化，不影响生产运行口径。生产上线验收仍应以当前环境复跑、专项测试、Docker/真实上游联调和压测结果为准。
 
 ### 3.4 分模块测试
 

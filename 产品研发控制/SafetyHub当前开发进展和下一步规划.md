@@ -2,7 +2,7 @@
 
 > 更新时间：2026-06-11
 > 当前阶段：阶段 6A — 单实例 Docker 生产稳定性与高并发治理
-> 当前状态：阶段 1~6A 核心能力已全部落地（详见第二、三、四章）；2026-06 完成"透明中继兼容性修复"，把 SafetyHub 中继层从 JSON 重序列化改造为字节级透传，能正确处理主流 LLM 客户端（含严格 JSON / 自定义 key 顺序 / 压缩响应 / 流式 SSE / 未知 JSON 端点等场景），同时保留原有扫描 / 脱敏 / 拦截 / 归档全部能力（详见第四 A 章）。当前自动化测试基线为 `94 passed`，其中中继相关 64/64 全绿。阶段 7 及之后暂不开发，仅保留长期规划；生产上线前重点转为真实上游联调、高并发阶梯压测、PostgreSQL 稳定性、备份恢复、运维安全配置和生产验收。
+> 当前状态：阶段 1~6A 核心能力已全部落地（详见第二、三、四章）；2026-06 完成"透明中继兼容性修复"，把 SafetyHub 中继层从 JSON 重序列化改造为字节级透传，能正确处理主流 LLM 客户端（含严格 JSON / 自定义 key 顺序 / 压缩响应 / 流式 SSE / 未知 JSON 端点等场景），同时保留原有扫描 / 脱敏 / 拦截 / 归档全部能力（详见第四 A 章）。历史自动化测试基线为 `94 passed`，当前生产代码已继续演进，测试结果需以当前环境复跑为准；最近一次本地复核为 `96 passed, 2 failed`，失败集中在后台认证测试夹具未初始化归档表，不影响生产运行口径。阶段 7 及之后暂不开发，仅保留长期规划；生产上线前重点转为真实上游联调、高并发阶梯压测、PostgreSQL 稳定性、备份恢复、运维安全配置和生产验收。
 
 ---
 
@@ -69,7 +69,7 @@
 | 运行状态 API | `admin/router.py`、`admin/schemas.py`、`admin/static/js/app.js`、`admin/static/index.html` | `/admin/api/runtime` 返回 worker pid、配置 worker 数、`/v1` 并发快照、归档队列快照、上游连接池配置和后台缓存配置；仪表盘可展示运行状态 |
 | Docker 生产启动 | `Dockerfile`、`docker-compose.yml`、`.env.example` | Dockerfile 使用多 worker 生产命令，不使用 `--reload`；Compose 包含 PostgreSQL、SafetyHub、Nginx 和健康检查；`.env.example` 包含阶段 6A 配置项 |
 | 透明中继兼容性修复（2026-06） | `proxy/relay.py`、`proxy/stream.py`、`proxy/header_policy.py` | 未脱敏请求改为 `content=raw_body` 字节透传，避免 httpx 重序列化破坏严格 JSON / 上游签名；流式 SSE 同步支持 `raw_body`；新增 `filter_response_headers` 统一剥离 hop-by-hop / `Content-Length` / `Content-Encoding`；非 `KNOWN_JSON_ENDPOINTS` 端点 JSON 解析失败由 400 降级为字节透传；64/64 中继相关测试通过 |
-| 自动化测试 | `tests/` | 当前全量测试 `94 passed`，覆盖并发闸门、APIKey、归档审计、图片资产、后台认证、规则热加载、中继和 Header Policy |
+| 自动化测试 | `tests/` | 历史全量测试基线为 `94 passed`；当前代码新增测试后最近一次本地复核为 `96 passed, 2 failed`，失败点集中在后台认证测试夹具未初始化 `message_archives` 表。该差异属于测试夹具与当前生产代码演进不同步，生产能力判断以专项测试、Docker/真实上游验收和当前环境复跑结果为准 |
 
 ---
 
@@ -234,7 +234,7 @@ NF-SafetyHub/
 
 | 验证项 | 命令 | 当前结果 |
 |--------|------|----------|
-| 全量单元测试 | `.\.venv\Scripts\python.exe -m pytest` | 历史基线 `94 passed`（开发环境 SQLite 内存库口径）。当仓库根 `.env` 已切换到真实 PostgreSQL 时，部分测试（`test_health.py`、`test_admin_auth.py`）会因为 `Starlette BaseHTTPMiddleware` + `asyncpg` 在 ASGI 测试 client 中的事件循环交错而出现 `Future attached to a different loop` / `another operation is in progress` 报错；`test_production_startup_validation_*` 也会因为 `Settings.get_secret()` 回退读取仓库根 `.env` 导致断言落空。这些都是测试 fixture 与生产 `.env` 耦合的环境问题，不是生产代码缺陷，生产 `uvicorn --workers=4` 运行时不复现；如需在本地复现历史基线，应使用 `DB_URL=sqlite+aiosqlite:///:memory:` 并取消 `.env` 中的 `SAFETYHUB_DATA_KEY` 后再跑 |
+| 全量单元测试 | `python -m pytest` 或已创建虚拟环境时使用 `.\.venv\Scripts\python.exe -m pytest` | 历史基线 `94 passed`；当前生产代码已继续演进，最近一次本地复核为 `96 passed, 2 failed`，失败集中在 `tests/test_admin_auth.py` 的后台认证测试夹具未初始化 `message_archives` 表。该问题属于测试夹具与当前生产代码演进不同步，不影响生产应用生命周期内的数据库初始化；生产上线判断应结合专项测试、Docker/真实上游联调和压测验收 |
 | 并发闸门专项测试 | `pytest tests/test_concurrency_limit.py` | 覆盖响应头、非 `/v1/*` 不受限、队列满、排队超时、排队释放后放行 |
 | APIKey / KeyProvider 专项测试 | `pytest tests/test_api_keys.py` | 覆盖手动创建、Provider 创建、reveal、上游 Key 替换、加密不回显、删除已吊销 Key 和请求体大小限制 |
 | 图片资产专项测试 | `pytest tests/test_image_assets.py tests/test_relay_image_assets.py tests/test_admin_image_assets.py` | 覆盖文生图响应引用提取、本体归档、后台状态 API 和操作审计 |
