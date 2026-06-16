@@ -3,7 +3,32 @@ set -euo pipefail
 
 DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${DEPLOY_DIR}/.." && pwd)"
-APIKEYS_SQL="${1:-}"
+APIKEYS_SQL=""
+IMPORT_APIKEYS=false
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --import-apikeys)
+      IMPORT_APIKEYS=true
+      if [ -z "${2:-}" ]; then
+        echo "--import-apikeys requires a sql file path" >&2
+        exit 1
+      fi
+      APIKEYS_SQL="$2"
+      shift 2
+      ;;
+    --import-apikeys=*)
+      IMPORT_APIKEYS=true
+      APIKEYS_SQL="${1#*=}"
+      shift
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      echo "usage: bash 交付运行手册/deploy_intranet_docker.sh [--import-apikeys /path/to/safetyhub_apikeys.sql]" >&2
+      exit 1
+      ;;
+  esac
+done
 
 cd "${PROJECT_ROOT}"
 
@@ -48,41 +73,17 @@ wait_for_table() {
   return 1
 }
 
-if [ -n "${APIKEYS_SQL}" ]; then
+echo "initializing database schema without clearing existing data..."
+docker compose exec -T safetyhub python scripts/init_db.py
+
+if [ "${IMPORT_APIKEYS}" = "true" ]; then
   if [ ! -f "${APIKEYS_SQL}" ]; then
     echo "api keys sql file not found: ${APIKEYS_SQL}" >&2
     exit 1
   fi
-  echo "initializing database schema before importing api keys..."
-  docker compose exec -T safetyhub python scripts/init_db.py
   wait_for_table api_keys
-
-  {
-    cat <<'SQL'
-BEGIN;
-DO $$
-DECLARE
-  table_name text;
-BEGIN
-  FOREACH table_name IN ARRAY ARRAY[
-    'admin_operations',
-    'approval_requests',
-    'approval_chains',
-    'audit_logs',
-    'image_assets',
-    'message_archives',
-    'security_policies',
-    'api_keys'
-  ] LOOP
-    IF to_regclass('public.' || table_name) IS NOT NULL THEN
-      EXECUTE format('TRUNCATE TABLE %I RESTART IDENTITY CASCADE', table_name);
-    END IF;
-  END LOOP;
-END $$;
-SQL
-    cat "${APIKEYS_SQL}"
-    echo "COMMIT;"
-  } | docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "${POSTGRES_USER:-safetyhub}" -d "${POSTGRES_DB:-safetyhub}"
+  echo "importing api keys without truncating existing tables..."
+  docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "${POSTGRES_USER:-safetyhub}" -d "${POSTGRES_DB:-safetyhub}" < "${APIKEYS_SQL}"
 fi
 
 docker compose ps

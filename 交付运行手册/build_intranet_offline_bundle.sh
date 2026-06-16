@@ -20,7 +20,9 @@ fi
 
 mkdir -p "${APP_DIR}" "${BUNDLE_DIR}/data"
 
-bash "${DEPLOY_DIR}/export_apikeys_for_intranet.sh" "${BUNDLE_DIR}/data"
+if [ "${SAFETYHUB_EXPORT_APIKEYS:-false}" = "true" ]; then
+  bash "${DEPLOY_DIR}/export_apikeys_for_intranet.sh" "${BUNDLE_DIR}/data"
+fi
 
 docker compose build safetyhub
 if [ "${SAFETYHUB_SKIP_PULL:-false}" != "true" ]; then
@@ -53,7 +55,10 @@ set -euo pipefail
 BUNDLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="${BUNDLE_DIR}/NF-SafetyHub"
 IMAGE_TAR="${BUNDLE_DIR}/safetyhub-images.tar"
-APIKEYS_SQL="$(find "${BUNDLE_DIR}/data" -maxdepth 1 -type f -name 'safetyhub_apikeys_*.sql' | sort | tail -n 1)"
+APIKEYS_SQL=""
+if [ "${SAFETYHUB_IMPORT_APIKEYS:-false}" = "true" ]; then
+  APIKEYS_SQL="$(find "${BUNDLE_DIR}/data" -maxdepth 1 -type f -name 'safetyhub_apikeys_*.sql' | sort | tail -n 1)"
+fi
 
 cd "${APP_DIR}"
 
@@ -74,12 +79,15 @@ if [ ! -f ".env" ]; then
   exit 1
 fi
 
-if [ -z "${APIKEYS_SQL}" ] || [ ! -f "${APIKEYS_SQL}" ]; then
-  echo "api keys sql file not found under ${BUNDLE_DIR}/data" >&2
-  exit 1
+if [ "${SAFETYHUB_IMPORT_APIKEYS:-false}" = "true" ]; then
+  if [ -z "${APIKEYS_SQL}" ] || [ ! -f "${APIKEYS_SQL}" ]; then
+    echo "api keys sql file not found under ${BUNDLE_DIR}/data" >&2
+    exit 1
+  fi
+  bash 交付运行手册/deploy_intranet_docker.sh --import-apikeys "${APIKEYS_SQL}"
+else
+  bash 交付运行手册/deploy_intranet_docker.sh
 fi
-
-bash 交付运行手册/deploy_intranet_docker.sh "${APIKEYS_SQL}"
 SH
 chmod +x "${BUNDLE_DIR}/install.sh" "${APP_DIR}/交付运行手册/deploy_intranet_docker.sh"
 
