@@ -183,8 +183,8 @@ async function loadRules() {
 
 async function toggleRule(ruleId, enabled) {
   setRulesMessage("保存中...");
-  const payload = await SafetyHub.api(`/admin/api/rules/${encodeURIComponent(ruleId)}`, {
-    method: "PATCH",
+  const payload = await SafetyHub.api(`/admin/api/rules/${encodeURIComponent(ruleId)}/toggle`, {
+    method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ enabled })
   });
@@ -230,7 +230,7 @@ async function loadApiKeys() {
     if (action === "reveal") return revealApiKey(row, button);
     if (action === "replace") return replaceApiKey(row.dataset.id);
     if (action === "revoke") return revokeApiKey(row.dataset.id);
-    if (action === "delete") return deleteApiKey(row.dataset.id);
+    if (action === "delete") return deleteApiKey(row.dataset.id, button);
     if (action === "edit") return enterEditMode(row);
     if (action === "save") return saveApiKey(row);
     if (action === "cancel") return loadApiKeys();
@@ -334,8 +334,8 @@ async function saveApiKey(row) {
   }
   setApiKeyMessage("保存中...");
   try {
-    await SafetyHub.api(`/admin/api/api-keys/${encodeURIComponent(row.dataset.id)}`, {
-      method: "PATCH",
+    await SafetyHub.api(`/admin/api/api-keys/${encodeURIComponent(row.dataset.id)}/update`, {
+      method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(fields)
     });
@@ -439,14 +439,18 @@ async function revokeApiKey(apiKeyId) {
   await loadApiKeys();
 }
 
-async function deleteApiKey(apiKeyId) {
+async function deleteApiKey(apiKeyId, button) {
+  if (button?.disabled) return;
   if (!window.confirm("确认从 SafetyHub 删除这条已吊销的 APIKey 记录？此操作不会恢复。")) return;
+  setButtonBusy(button, true, "删除中...");
+  setApiKeyMessage("删除中...");
   try {
-    await SafetyHub.api(`/admin/api/api-keys/${encodeURIComponent(apiKeyId)}`, { method: "DELETE" });
+    await SafetyHub.api(`/admin/api/api-keys/${encodeURIComponent(apiKeyId)}/delete`, { method: "POST" });
     setApiKeyMessage("APIKey 本地记录已删除。");
     await loadApiKeys();
   } catch (error) {
     setApiKeyMessage(`删除失败：${error.message}`);
+    setButtonBusy(button, false);
   }
 }
 

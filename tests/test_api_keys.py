@@ -241,11 +241,28 @@ async def test_admin_api_key_crud_and_admin_operation_logging():
             auth=auth,
             json={"new_upstream_key": "sk-upstream-new"},
         )
+        update_response = client.post(
+            f"/admin/api/api-keys/{api_key_id}/update",
+            auth=auth,
+            json={"name": "研发 Key Updated", "owner_department": "AI Lab"},
+        )
         reveal_response = client.post(f"/admin/api/api-keys/{api_key_id}/reveal", auth=auth)
         delete_active_response = client.delete(f"/admin/api/api-keys/{api_key_id}", auth=auth)
         revoke_response = client.post(f"/admin/api/api-keys/{api_key_id}/revoke", auth=auth)
         delete_response = client.delete(f"/admin/api/api-keys/{api_key_id}", auth=auth)
         list_after_delete_response = client.get("/admin/api/api-keys", auth=auth)
+        post_delete_create_response = client.post(
+            "/admin/api/api-keys",
+            auth=auth,
+            json={
+                "name": "POST Delete Key",
+                "owner_user_id": "user_post_delete",
+                "upstream_key": "sk-upstream-post-delete",
+            },
+        )
+        post_delete_api_key_id = post_delete_create_response.json()["item"]["id"]
+        post_delete_revoke_response = client.post(f"/admin/api/api-keys/{post_delete_api_key_id}/revoke", auth=auth)
+        post_delete_response = client.post(f"/admin/api/api-keys/{post_delete_api_key_id}/delete", auth=auth)
         operations_response = client.get("/admin/api/admin-ops?resource_type=api_key", auth=auth)
 
     assert create_response.status_code == 200
@@ -260,6 +277,9 @@ async def test_admin_api_key_crud_and_admin_operation_logging():
     assert "model_allowlist" not in create_response.json()["item"]
     assert list_response.json()["pagination"]["total"] == 2
     assert replace_response.json()["item"]["is_decoupled"] is True
+    assert update_response.status_code == 200
+    assert update_response.json()["item"]["name"] == "研发 Key Updated"
+    assert update_response.json()["item"]["owner_department"] == "AI Lab"
     assert reveal_response.status_code == 200
     assert reveal_response.json()["key"] == "sk-upstream-original"
     assert reveal_response.headers["cache-control"] == "no-store"
@@ -269,10 +289,15 @@ async def test_admin_api_key_crud_and_admin_operation_logging():
     assert delete_response.status_code == 200
     assert delete_response.json()["api_key_id"] == api_key_id
     assert list_after_delete_response.json()["pagination"]["total"] == 1
+    assert post_delete_create_response.status_code == 200
+    assert post_delete_revoke_response.json()["item"]["status"] == "revoked"
+    assert post_delete_response.status_code == 200
+    assert post_delete_response.json()["api_key_id"] == post_delete_api_key_id
     assert {item["operation"] for item in operations_response.json()["items"]} >= {
         "api_key.create",
         "api_key.view_detail",
         "api_key.replace_upstream_key",
+        "api_key.update",
         "api_key.reveal",
         "api_key.revoke",
         "api_key.delete",

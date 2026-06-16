@@ -271,13 +271,22 @@ async def list_rules(request: Request):
     return RuleListResponse(items=_load_rules(active_settings))
 
 
-@router.patch("/rules/{rule_id}", response_model=RuleMutationResponse)
-async def toggle_rule(request: Request, rule_id: str, payload: RuleToggleRequest):
+async def _toggle_rule(request: Request, rule_id: str, payload: RuleToggleRequest) -> RuleMutationResponse:
     active_settings = getattr(request.app.state, "settings", settings)
     rule = _set_rule_enabled(rule_id, payload.enabled, active_settings)
     reloaded = await _reload_scanners(request)
     await _write_admin_operation(request, "rule.toggle", "rule", rule_id)
     return RuleMutationResponse(status="ok", rule=rule, reloaded=reloaded)
+
+
+@router.patch("/rules/{rule_id}", response_model=RuleMutationResponse)
+async def toggle_rule(request: Request, rule_id: str, payload: RuleToggleRequest):
+    return await _toggle_rule(request, rule_id, payload)
+
+
+@router.post("/rules/{rule_id}/toggle", response_model=RuleMutationResponse)
+async def toggle_rule_via_post(request: Request, rule_id: str, payload: RuleToggleRequest):
+    return await _toggle_rule(request, rule_id, payload)
 
 
 @router.post("/rules/reload", response_model=RulesReloadResponse)
@@ -365,8 +374,7 @@ async def get_api_key(request: Request, api_key_id: str):
     return _api_key_to_item(record)
 
 
-@router.patch("/api-keys/{api_key_id}", response_model=ApiKeyMutationResponse)
-async def update_api_key(request: Request, api_key_id: str, payload: ApiKeyUpdateRequest):
+async def _update_api_key(request: Request, api_key_id: str, payload: ApiKeyUpdateRequest) -> ApiKeyMutationResponse:
     fields = payload.model_dump(exclude_unset=True)
     if not fields:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No editable fields provided")
@@ -378,6 +386,16 @@ async def update_api_key(request: Request, api_key_id: str, payload: ApiKeyUpdat
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="APIKey not found")
     await _write_admin_operation(request, "api_key.update", "api_key", api_key_id)
     return ApiKeyMutationResponse(status="ok", item=_api_key_to_item(record))
+
+
+@router.patch("/api-keys/{api_key_id}", response_model=ApiKeyMutationResponse)
+async def update_api_key(request: Request, api_key_id: str, payload: ApiKeyUpdateRequest):
+    return await _update_api_key(request, api_key_id, payload)
+
+
+@router.post("/api-keys/{api_key_id}/update", response_model=ApiKeyMutationResponse)
+async def update_api_key_via_post(request: Request, api_key_id: str, payload: ApiKeyUpdateRequest):
+    return await _update_api_key(request, api_key_id, payload)
 
 
 @router.post("/api-keys/{api_key_id}/reveal", response_model=ApiKeyRevealResponse)
@@ -404,8 +422,7 @@ async def revoke_api_key(request: Request, api_key_id: str):
     return ApiKeyMutationResponse(status="ok", item=_api_key_to_item(record))
 
 
-@router.delete("/api-keys/{api_key_id}", response_model=ApiKeyDeleteResponse)
-async def delete_api_key(request: Request, api_key_id: str):
+async def _delete_revoked_api_key(request: Request, api_key_id: str) -> ApiKeyDeleteResponse:
     try:
         deleted = await _api_key_service(request).delete_revoked(api_key_id)
     except ValueError as exc:
@@ -414,6 +431,16 @@ async def delete_api_key(request: Request, api_key_id: str):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="APIKey not found")
     await _write_admin_operation(request, "api_key.delete", "api_key", api_key_id)
     return ApiKeyDeleteResponse(status="ok", api_key_id=api_key_id)
+
+
+@router.delete("/api-keys/{api_key_id}", response_model=ApiKeyDeleteResponse)
+async def delete_api_key(request: Request, api_key_id: str):
+    return await _delete_revoked_api_key(request, api_key_id)
+
+
+@router.post("/api-keys/{api_key_id}/delete", response_model=ApiKeyDeleteResponse)
+async def delete_api_key_via_post(request: Request, api_key_id: str):
+    return await _delete_revoked_api_key(request, api_key_id)
 
 
 @router.post("/api-keys/{api_key_id}/replace-upstream-key", response_model=ApiKeyMutationResponse)
