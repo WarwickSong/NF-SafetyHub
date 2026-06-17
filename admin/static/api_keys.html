@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>APIKey - SafetyHub</title>
-  <link rel="stylesheet" href="/admin/css/style.css?v=api-key-modal-20260605-2">
+  <link rel="stylesheet" href="/admin/css/style.css?v=api-key-pagination-search-20260617">
 </head>
 <body data-page="apiKeys">
   <nav class="sidebar">
@@ -48,6 +48,16 @@
         <h2>APIKey 列表</h2>
         <p class="form-hint">点击「编辑」可修改名称、所属用户、部门、成本中心和过期时间；模型/token/资源权限由中转站管理。</p>
       </div>
+      <div class="list-toolbar api-key-toolbar">
+        <label class="field"><span>搜索</span><input id="apiKeySearch" placeholder="名称、用户、部门、前后缀、Provider"></label>
+        <label class="field"><span>状态</span><select id="apiKeyStatus"><option value="">全部</option><option value="active">active</option><option value="revoked">revoked</option></select></label>
+        <label class="field"><span>每页</span><select id="apiKeyPageSize"><option value="20">20 条</option><option value="50">50 条</option><option value="100">100 条</option></select></label>
+        <div class="toolbar-actions">
+          <button class="button secondary" id="applyApiKeyFilters">搜索</button>
+          <button class="button secondary" id="resetApiKeyFilters">重置</button>
+        </div>
+      </div>
+      <div class="pagination-bar" id="apiKeyPaginationTop"></div>
       <div class="table-wrap">
         <table class="api-key-table">
           <thead>
@@ -94,6 +104,6 @@
       </div>
     </div>
   </main>
-  <script src="/admin/js/app.js?v=admin-post-actions-20260616"></script>
+  <script src="/admin/js/app.js?v=api-key-pagination-search-20260617"></script>
 </body>
 </html>
