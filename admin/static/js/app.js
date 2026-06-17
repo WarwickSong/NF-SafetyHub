@@ -203,9 +203,18 @@ function setRulesMessage(message) {
   if (element) element.textContent = message;
 }
 
+const apiKeyListState = {
+  page: 1,
+  limit: 20,
+  total: 0,
+  search: "",
+  status: ""
+};
+
 async function setupApiKeysPage() {
   document.getElementById("createApiKey")?.addEventListener("click", createApiKey);
   document.getElementById("bulkReplaceApiKeys")?.addEventListener("click", bulkReplaceApiKeys);
+  bindApiKeyListControls();
   ensureApiKeyModal();
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeApiKeyModal();
@@ -218,10 +227,77 @@ async function setupApiKeysPage() {
   await loadApiKeys();
 }
 
-async function loadApiKeys() {
-  const payload = await SafetyHub.api("/admin/api/api-keys");
+function bindApiKeyListControls() {
+  const applyButton = document.getElementById("applyApiKeyFilters");
+  if (applyButton && applyButton.dataset.bound !== "true") {
+    applyButton.dataset.bound = "true";
+    applyButton.addEventListener("click", () => applyApiKeyFilters());
+  }
+  const resetButton = document.getElementById("resetApiKeyFilters");
+  if (resetButton && resetButton.dataset.bound !== "true") {
+    resetButton.dataset.bound = "true";
+    resetButton.addEventListener("click", () => resetApiKeyFilters());
+  }
+  const searchInput = document.getElementById("apiKeySearch");
+  if (searchInput && searchInput.dataset.bound !== "true") {
+    searchInput.dataset.bound = "true";
+    searchInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") applyApiKeyFilters();
+    });
+  }
+  const statusSelect = document.getElementById("apiKeyStatus");
+  if (statusSelect && statusSelect.dataset.bound !== "true") {
+    statusSelect.dataset.bound = "true";
+    statusSelect.addEventListener("change", () => applyApiKeyFilters());
+  }
+  const pageSizeSelect = document.getElementById("apiKeyPageSize");
+  if (pageSizeSelect && pageSizeSelect.dataset.bound !== "true") {
+    pageSizeSelect.dataset.bound = "true";
+    pageSizeSelect.addEventListener("change", () => {
+      apiKeyListState.limit = normalizeApiKeyLimit(pageSizeSelect.value);
+      apiKeyListState.page = 1;
+      loadApiKeys();
+    });
+  }
+}
+
+function applyApiKeyFilters() {
+  apiKeyListState.search = inputValue("apiKeySearch");
+  apiKeyListState.status = inputValue("apiKeyStatus");
+  apiKeyListState.limit = normalizeApiKeyLimit(document.getElementById("apiKeyPageSize")?.value);
+  apiKeyListState.page = 1;
+  return loadApiKeys();
+}
+
+function resetApiKeyFilters() {
+  const searchInput = document.getElementById("apiKeySearch");
+  const statusSelect = document.getElementById("apiKeyStatus");
+  const pageSizeSelect = document.getElementById("apiKeyPageSize");
+  if (searchInput) searchInput.value = "";
+  if (statusSelect) statusSelect.value = "";
+  if (pageSizeSelect) pageSizeSelect.value = "20";
+  apiKeyListState.page = 1;
+  apiKeyListState.limit = 20;
+  apiKeyListState.total = 0;
+  apiKeyListState.search = "";
+  apiKeyListState.status = "";
+  return loadApiKeys();
+}
+
+async function loadApiKeys(page) {
+  apiKeyListState.page = Math.max(1, Number(page || apiKeyListState.page || 1));
+  apiKeyListState.limit = normalizeApiKeyLimit(apiKeyListState.limit);
+  const params = new URLSearchParams();
+  params.set("limit", String(apiKeyListState.limit));
+  params.set("offset", String((apiKeyListState.page - 1) * apiKeyListState.limit));
+  appendParam(params, "search", apiKeyListState.search);
+  appendParam(params, "status", apiKeyListState.status);
+  const payload = await SafetyHub.api(`/admin/api/api-keys?${params}`);
+  apiKeyListState.total = payload.pagination?.total || 0;
+  const totalPages = getApiKeyTotalPages();
+  if (apiKeyListState.page > totalPages) return loadApiKeys(totalPages);
   const table = document.getElementById("apiKeysTable");
-  table.innerHTML = payload.items.map((item) => renderApiKeyRow(item)).join("");
+  table.innerHTML = payload.items.length ? payload.items.map((item) => renderApiKeyRow(item)).join("") : `<tr><td colspan="7">暂无匹配的 APIKey。</td></tr>`;
   table.querySelectorAll("button[data-action]").forEach((button) => button.addEventListener("click", async (event) => {
     event.stopPropagation();
     const row = button.closest("tr");
@@ -235,6 +311,45 @@ async function loadApiKeys() {
     if (action === "save") return saveApiKey(row);
     if (action === "cancel") return loadApiKeys();
   }));
+  renderApiKeyPagination();
+}
+
+function normalizeApiKeyLimit(value) {
+  const limit = Number(value);
+  return [20, 50, 100].includes(limit) ? limit : 20;
+}
+
+function getApiKeyTotalPages() {
+  return Math.max(1, Math.ceil(apiKeyListState.total / apiKeyListState.limit));
+}
+
+function renderApiKeyPagination() {
+  const target = document.getElementById("apiKeyPaginationTop");
+  if (!target) return;
+  const totalPages = getApiKeyTotalPages();
+  const start = apiKeyListState.total === 0 ? 0 : (apiKeyListState.page - 1) * apiKeyListState.limit + 1;
+  const end = Math.min(apiKeyListState.total, apiKeyListState.page * apiKeyListState.limit);
+  target.innerHTML = `<div class="pagination-summary">共 ${apiKeyListState.total} 条，当前 ${start}-${end} 条，第 ${apiKeyListState.page} / ${totalPages} 页</div>
+    <div class="pagination-actions">
+      <button class="button small secondary" data-api-key-page="prev">上一页</button>
+      <label class="page-jump">跳到 <input id="apiKeyPageInput" type="number" min="1" max="${totalPages}" value="${apiKeyListState.page}"> 页</label>
+      <button class="button small secondary" data-api-key-page="go">跳转</button>
+      <button class="button small secondary" data-api-key-page="next">下一页</button>
+    </div>`;
+  target.querySelector('[data-api-key-page="prev"]').disabled = apiKeyListState.page <= 1;
+  target.querySelector('[data-api-key-page="next"]').disabled = apiKeyListState.page >= totalPages;
+  target.querySelector('[data-api-key-page="prev"]').addEventListener("click", () => loadApiKeys(apiKeyListState.page - 1));
+  target.querySelector('[data-api-key-page="next"]').addEventListener("click", () => loadApiKeys(apiKeyListState.page + 1));
+  target.querySelector('[data-api-key-page="go"]').addEventListener("click", () => jumpApiKeyPage(totalPages));
+  target.querySelector("#apiKeyPageInput").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") jumpApiKeyPage(totalPages);
+  });
+}
+
+function jumpApiKeyPage(totalPages) {
+  const input = document.getElementById("apiKeyPageInput");
+  const page = Math.min(totalPages, Math.max(1, Number(input?.value || 1)));
+  return loadApiKeys(page);
 }
 
 function renderApiKeyRow(item) {

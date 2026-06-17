@@ -307,6 +307,59 @@ async def test_admin_api_key_crud_and_admin_operation_logging():
 
 
 @pytest.mark.asyncio
+async def test_admin_api_key_list_supports_pagination_and_search():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    app = FastAPI()
+    app.include_router(admin_router, prefix="/admin/api")
+    app.state.settings = Settings(admin_password="strong-local-password")
+    app.state.session_factory = session_factory
+    app.state.api_key_service = ApiKeyService(session_factory, ApiKeyCrypto("test-data-key"))
+    app.state.admin_operation_writer = AdminOperationWriter(session_factory)
+    app.state.admin_operation_reader = AdminOperationReader(session_factory)
+
+    with TestClient(app) as client:
+        auth = ("admin", "strong-local-password")
+        for index in range(25):
+            response = client.post(
+                "/admin/api/api-keys",
+                auth=auth,
+                json={
+                    "name": f"Team Key {index:02d}",
+                    "owner_user_id": f"user_{index:02d}",
+                    "owner_department": "AI Lab" if index == 7 else "Platform",
+                    "cost_center": "cc-search" if index == 7 else "cc-main",
+                    "upstream_key": f"sk-upstream-page-{index:02d}",
+                },
+            )
+            assert response.status_code == 200
+        revoked_id = client.get("/admin/api/api-keys?search=Team%20Key%2007", auth=auth).json()["items"][0]["id"]
+        revoke_response = client.post(f"/admin/api/api-keys/{revoked_id}/revoke", auth=auth)
+        first_page = client.get("/admin/api/api-keys", auth=auth)
+        second_page = client.get("/admin/api/api-keys?limit=20&offset=20", auth=auth)
+        fifty_page = client.get("/admin/api/api-keys?limit=50", auth=auth)
+        search_response = client.get("/admin/api/api-keys?search=cc-search", auth=auth)
+        status_response = client.get("/admin/api/api-keys?status=revoked", auth=auth)
+
+    assert revoke_response.status_code == 200
+    assert first_page.status_code == 200
+    assert first_page.json()["pagination"] == {"total": 25, "limit": 20, "offset": 0}
+    assert len(first_page.json()["items"]) == 20
+    assert second_page.json()["pagination"] == {"total": 25, "limit": 20, "offset": 20}
+    assert len(second_page.json()["items"]) == 5
+    assert len(fifty_page.json()["items"]) == 25
+    assert search_response.json()["pagination"]["total"] == 1
+    assert search_response.json()["items"][0]["owner_department"] == "AI Lab"
+    assert status_response.json()["pagination"]["total"] == 1
+    assert status_response.json()["items"][0]["status"] == "revoked"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_relay_uses_managed_upstream_key_without_enforcing_resource_allowlists(monkeypatch):
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     session_factory = async_sessionmaker(engine, expire_on_commit=False)

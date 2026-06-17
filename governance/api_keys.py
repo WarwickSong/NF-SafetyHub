@@ -12,7 +12,7 @@ import uuid
 from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from config import settings
@@ -182,14 +182,35 @@ class ApiKeyService:
                 return safetyhub_key
         raise ValueError("failed to generate unique safetyhub api key")
 
-    async def list(self, limit: int = 20, offset: int = 0, status: str | None = None) -> ApiKeyPage:
+    async def list(self, limit: int = 20, offset: int = 0, status: str | None = None, search: str | None = None) -> ApiKeyPage:
         safe_limit = min(max(limit, 1), 100)
         safe_offset = max(offset, 0)
+        search_text = (search or "").strip()
         stmt = select(ApiKeyRecord)
         count_stmt = select(func.count(ApiKeyRecord.id))
+        filters = []
         if status:
-            stmt = stmt.where(ApiKeyRecord.status == status)
-            count_stmt = count_stmt.where(ApiKeyRecord.status == status)
+            filters.append(ApiKeyRecord.status == status)
+        if search_text:
+            pattern = f"%{search_text}%"
+            filters.append(
+                or_(
+                    ApiKeyRecord.id.ilike(pattern),
+                    ApiKeyRecord.name.ilike(pattern),
+                    ApiKeyRecord.owner_user_id.ilike(pattern),
+                    ApiKeyRecord.owner_department.ilike(pattern),
+                    ApiKeyRecord.cost_center.ilike(pattern),
+                    ApiKeyRecord.provider_name.ilike(pattern),
+                    ApiKeyRecord.status.ilike(pattern),
+                    ApiKeyRecord.key_prefix.ilike(pattern),
+                    ApiKeyRecord.key_suffix.ilike(pattern),
+                    ApiKeyRecord.upstream_key_prefix.ilike(pattern),
+                    ApiKeyRecord.upstream_key_id.ilike(pattern),
+                )
+            )
+        if filters:
+            stmt = stmt.where(*filters)
+            count_stmt = count_stmt.where(*filters)
         stmt = stmt.order_by(ApiKeyRecord.created_at.desc()).limit(safe_limit).offset(safe_offset)
         async with self._session_factory() as session:
             total = await session.scalar(count_stmt)

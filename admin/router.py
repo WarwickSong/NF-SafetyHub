@@ -332,8 +332,9 @@ async def list_api_keys(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     status_filter: str | None = Query(default=None, alias="status"),
+    search: str | None = Query(default=None, max_length=128),
 ):
-    page = await _api_key_service(request).list(limit=limit, offset=offset, status=status_filter)
+    page = await _api_key_service(request).list(limit=limit, offset=offset, status=status_filter, search=search)
     return ApiKeyListResponse(
         items=[_api_key_to_item(item) for item in page.items],
         pagination=Pagination(total=page.total, limit=page.limit, offset=page.offset),
