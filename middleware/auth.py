@@ -9,6 +9,7 @@ from urllib.parse import quote
 
 from fastapi import Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from config import Settings, settings
@@ -41,6 +42,13 @@ class AdminStaticAuthMiddleware(BaseHTTPMiddleware):
             headers = exc.headers or {}
             return Response(str(exc.detail), status_code=exc.status_code, headers=headers)
         return await call_next(request)
+
+
+class AdminStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        _set_admin_static_cache_headers(path, response)
+        return response
 
 
 async def require_admin_access(
@@ -84,6 +92,15 @@ def validate_admin_login(username: str, password: str, active_settings: Settings
     username_valid = secrets.compare_digest(username, active_settings.admin_username)
     password_valid = secrets.compare_digest(password, active_settings.admin_password)
     return username_valid and password_valid
+
+
+def _set_admin_static_cache_headers(path: str, response: Response) -> None:
+    normalized_path = path.strip("/")
+    if normalized_path == "" or normalized_path.endswith(".html"):
+        response.headers["Cache-Control"] = "no-store"
+        return
+    if normalized_path.endswith(".js") or normalized_path.endswith(".css"):
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
 
 
 def _get_active_settings(request: Request) -> Settings:

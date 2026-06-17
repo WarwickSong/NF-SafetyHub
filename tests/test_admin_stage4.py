@@ -154,8 +154,8 @@ def test_admin_rule_toggle_updates_yaml_and_triggers_reload(tmp_path):
     app.state.scanner = scanner
 
     with TestClient(app) as client:
-        response = client.patch(
-            "/admin/api/rules/KW-TEST",
+        response = client.post(
+            "/admin/api/rules/KW-TEST/toggle",
             json={"enabled": False},
             auth=("admin", "strong-local-password"),
         )

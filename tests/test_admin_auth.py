@@ -1,10 +1,9 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from fastapi.staticfiles import StaticFiles
 
 from admin.router import router
 from config import Settings
-from middleware.auth import AdminStaticAuthMiddleware
+from middleware.auth import AdminStaticAuthMiddleware, AdminStaticFiles
 
 
 def create_test_app(settings: Settings) -> FastAPI:
@@ -17,7 +16,7 @@ def create_test_app(settings: Settings) -> FastAPI:
 def create_static_test_app(settings: Settings) -> FastAPI:
     app = create_test_app(settings)
     app.add_middleware(AdminStaticAuthMiddleware)
-    app.mount("/admin", StaticFiles(directory="admin/static", html=True), name="admin")
+    app.mount("/admin", AdminStaticFiles(directory="admin/static", html=True), name="admin")
     return app
 
 
@@ -108,6 +107,30 @@ def test_admin_login_assets_are_public():
     assert js_response.status_code == 200
     assert "text/css" in css_response.headers["content-type"]
     assert "javascript" in js_response.headers["content-type"]
+
+
+def test_admin_static_assets_include_cache_control_headers():
+    app = create_static_test_app(Settings(admin_password="strong-local-password"))
+
+    with TestClient(app) as client:
+        page_response = client.get("/admin/api_keys.html", auth=("admin", "strong-local-password"))
+        js_response = client.get("/admin/js/app.js")
+        css_response = client.get("/admin/css/style.css")
+
+    assert page_response.status_code == 200
+    assert page_response.headers["cache-control"] == "no-store"
+    assert js_response.headers["cache-control"] == "no-cache, must-revalidate"
+    assert css_response.headers["cache-control"] == "no-cache, must-revalidate"
+
+
+def test_admin_frontend_write_actions_use_post_for_intranet_compatibility():
+    script = open("admin/static/js/app.js", encoding="utf-8").read()
+
+    assert 'method: "PATCH"' not in script
+    assert 'method: "DELETE"' not in script
+    assert "/toggle" in script
+    assert "/update" in script
+    assert "/delete" in script
 
 
 def test_admin_static_page_allows_valid_basic_auth():
