@@ -3,32 +3,6 @@ set -euo pipefail
 
 DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${DEPLOY_DIR}/.." && pwd)"
-APIKEYS_SQL=""
-IMPORT_APIKEYS=false
-
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --import-apikeys)
-      IMPORT_APIKEYS=true
-      if [ -z "${2:-}" ]; then
-        echo "--import-apikeys requires a sql file path" >&2
-        exit 1
-      fi
-      APIKEYS_SQL="$2"
-      shift 2
-      ;;
-    --import-apikeys=*)
-      IMPORT_APIKEYS=true
-      APIKEYS_SQL="${1#*=}"
-      shift
-      ;;
-    *)
-      echo "unknown argument: $1" >&2
-      echo "usage: bash 交付运行手册/deploy_intranet_docker.sh [--import-apikeys /path/to/safetyhub_apikeys.sql]" >&2
-      exit 1
-      ;;
-  esac
-done
 
 cd "${PROJECT_ROOT}"
 
@@ -54,36 +28,17 @@ fi
 
 if [ "${SAFETYHUB_SKIP_BUILD:-false}" = "true" ]; then
   docker compose up -d postgres
-  docker compose up --no-build -d safetyhub nginx
 else
   docker compose up --build -d postgres
-  docker compose up --build -d safetyhub nginx
 fi
 
-wait_for_table() {
-  table_name="$1"
-  for _ in $(seq 1 60); do
-    if docker compose exec -T postgres psql -qAt -U "${POSTGRES_USER:-safetyhub}" -d "${POSTGRES_DB:-safetyhub}" \
-      -c "SELECT to_regclass('public.${table_name}') IS NOT NULL;" | grep -qx 't'; then
-      return 0
-    fi
-    sleep 2
-  done
-  echo "database table not ready: ${table_name}" >&2
-  return 1
-}
+echo "rebuilding runtime tables while preserving api_keys..."
+docker compose run --rm safetyhub python scripts/rebuild_runtime_tables_preserve_apikeys.py
 
-echo "initializing database schema without clearing existing data..."
-docker compose exec -T safetyhub python scripts/init_db.py
-
-if [ "${IMPORT_APIKEYS}" = "true" ]; then
-  if [ ! -f "${APIKEYS_SQL}" ]; then
-    echo "api keys sql file not found: ${APIKEYS_SQL}" >&2
-    exit 1
-  fi
-  wait_for_table api_keys
-  echo "importing api keys without truncating existing tables..."
-  docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "${POSTGRES_USER:-safetyhub}" -d "${POSTGRES_DB:-safetyhub}" < "${APIKEYS_SQL}"
+if [ "${SAFETYHUB_SKIP_BUILD:-false}" = "true" ]; then
+  docker compose up --no-build -d safetyhub nginx
+else
+  docker compose up --build -d safetyhub nginx
 fi
 
 docker compose ps
