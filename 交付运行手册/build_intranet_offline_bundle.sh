@@ -33,7 +33,11 @@ tar \
   --exclude='./.env' \
   --exclude='./data' \
   --exclude='./__pycache__' \
+  --exclude='*/__pycache__' \
+  --exclude='*.pyc' \
   --exclude='./.pytest_cache' \
+  --exclude='./debug-*.md' \
+  --exclude='./.dbg' \
   --exclude='./内网离线部署包' \
   -cf - . | tar -C "${APP_DIR}" --strip-components=1 -xf -
 
