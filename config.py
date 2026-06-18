@@ -41,7 +41,6 @@ class Settings(BaseSettings):
     data_governance_coverage_max_records: int = 5000
     data_governance_coverage_batch_size: int = 200
     data_governance_coverage_batch_sleep_ms: int = 200
-    data_governance_coverage_lookback: int = 200
     data_governance_cleanup_batch_size: int = 1000
     system_disk_monitor_path: Path = Path("/")
     system_disk_monitor_container_path: Path = Path("/mnt/system-disk")

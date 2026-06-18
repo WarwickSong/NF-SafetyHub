@@ -545,6 +545,141 @@ pre {
   overflow-wrap: anywhere;
 }
 
+body[data-page="dataGovernance"] .governance-card {
+  padding: 18px;
+}
+
+body[data-page="dataGovernance"] .governance-card h2 {
+  margin-bottom: 14px;
+}
+
+body[data-page="dataGovernance"] .governance-model-grid,
+body[data-page="dataGovernance"] .governance-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+body[data-page="dataGovernance"] .governance-summary-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+body[data-page="dataGovernance"] .governance-model-item,
+body[data-page="dataGovernance"] .governance-summary-card,
+body[data-page="dataGovernance"] .governance-status-card {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+  background: #ffffff;
+}
+
+body[data-page="dataGovernance"] .governance-model-item span,
+body[data-page="dataGovernance"] .governance-summary-card span,
+body[data-page="dataGovernance"] .governance-status-card span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+body[data-page="dataGovernance"] .governance-model-item strong,
+body[data-page="dataGovernance"] .governance-summary-card strong,
+body[data-page="dataGovernance"] .governance-status-card strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+body[data-page="dataGovernance"] .governance-model-item em {
+  color: #1d4ed8;
+  font-style: normal;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+body[data-page="dataGovernance"] .governance-model-item small {
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+body[data-page="dataGovernance"] .governance-summary-card div,
+body[data-page="dataGovernance"] .governance-status-card {
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+}
+
+body[data-page="dataGovernance"] .governance-summary-card span,
+body[data-page="dataGovernance"] .governance-status-card span {
+  grid-column: 1 / -1;
+}
+
+body[data-page="dataGovernance"] .governance-status-list {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+body[data-page="dataGovernance"] .governance-filters {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(120px, 1fr)) auto;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+body[data-page="dataGovernance"] .governance-filters input {
+  width: 100%;
+  min-width: 0;
+}
+
+body[data-page="dataGovernance"] .governance-coverage-filters {
+  grid-template-columns: repeat(4, minmax(140px, 1fr)) auto;
+}
+
+body[data-page="dataGovernance"] .governance-coverage-filters .button {
+  justify-self: start;
+}
+
+body[data-page="dataGovernance"] .governance-field {
+  display: grid;
+  gap: 8px;
+  align-self: stretch;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  background: #f8fafc;
+}
+
+body[data-page="dataGovernance"] .governance-field span {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+body[data-page="dataGovernance"] .governance-field small {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+body[data-page="dataGovernance"] .governance-field input {
+  background: #ffffff;
+}
+
+body[data-page="dataGovernance"] .governance-cleanup-filters {
+  grid-template-columns: repeat(3, minmax(190px, 1fr)) minmax(120px, 0.6fr) auto auto;
+}
+
+body[data-page="dataGovernance"] .governance-cleanup-filters label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  color: var(--text);
+}
+
+body[data-page="dataGovernance"] .governance-cleanup-filters label input {
+  width: auto;
+}
+
 .error,
 .login-message {
   color: var(--danger);
@@ -604,5 +739,12 @@ pre {
 
   .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  body[data-page="dataGovernance"] .governance-model-grid,
+  body[data-page="dataGovernance"] .governance-summary-grid,
+  body[data-page="dataGovernance"] .governance-filters,
+  body[data-page="dataGovernance"] .governance-cleanup-filters {
+    grid-template-columns: 1fr;
   }
 }

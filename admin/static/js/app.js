@@ -737,21 +737,33 @@ async function loadDataGovernanceSummary() {
   if (!target) return;
   const summary = await SafetyHub.api("/admin/api/data-governance/summary");
   target.innerHTML = [
-    `<div class="trend-item"><span>训练数据</span><strong>总量 ${summary.training_total}</strong><strong>有效 ${summary.training_active}</strong><strong>待分析 ${summary.training_pending_analysis}</strong><strong>被覆盖 ${summary.training_covered}</strong><strong>过期 ${summary.training_expired}</strong></div>`,
-    `<div class="trend-item"><span>审计数据</span><strong>总量 ${summary.audit_total}</strong><strong>过期 ${summary.audit_expired}</strong></div>`,
-    `<div class="trend-item"><span>治理任务</span><strong>${summary.running_job ? `运行中 #${summary.running_job.id}` : "无运行任务"}</strong><strong>${summary.running_job ? `已处理 ${summary.running_job.processed_count}` : "可手动启动"}</strong></div>`,
-    `<div class="trend-item"><span>追溯期</span><strong>训练 ${summary.archive_retention_days} 天</strong><strong>审计 ${summary.audit_retention_days} 天</strong></div>`
+    `<div class="governance-summary-card"><span>训练数据</span><div><strong>总量 ${summary.training_total}</strong><strong>有效 ${summary.training_active}</strong><strong>待分析 ${summary.training_pending_analysis}</strong><strong>被覆盖 ${summary.training_covered}</strong><strong>过期 ${summary.training_expired}</strong></div></div>`,
+    `<div class="governance-summary-card"><span>审计数据</span><div><strong>总量 ${summary.audit_total}</strong><strong>过期 ${summary.audit_expired}</strong></div></div>`,
+    `<div class="governance-summary-card"><span>治理任务</span><div><strong>${summary.running_job ? `运行中 #${summary.running_job.id}` : "无运行任务"}</strong><strong>${summary.running_job ? `已处理 ${summary.running_job.processed_count}` : "可手动启动"}</strong></div></div>`,
+    `<div class="governance-summary-card"><span>追溯期</span><div><strong>训练 ${summary.archive_retention_days} 天</strong><strong>审计 ${summary.audit_retention_days} 天</strong></div></div>`
   ].join("");
 }
 
 function coveragePayload() {
+  const maxMinutes = Math.min(60, Math.max(1, Number(inputValue("coverageMaxMinutes") || 10)));
   return {
     max_records: Math.min(100000, Math.max(1, Number(inputValue("coverageMaxRecords") || 5000))),
-    max_seconds: Math.min(3600, Math.max(1, Number(inputValue("coverageMaxSeconds") || 600))),
+    max_seconds: maxMinutes * 60,
     batch_size: Math.min(5000, Math.max(1, Number(inputValue("coverageBatchSize") || 200))),
-    batch_sleep_ms: Math.min(5000, Math.max(0, Number(inputValue("coverageBatchSleepMs") || 200))),
-    lookback: Math.min(5000, Math.max(1, Number(inputValue("coverageLookback") || 200)))
+    batch_sleep_ms: Math.min(5000, Math.max(0, Number(inputValue("coverageBatchSleepMs") || 200)))
   };
+}
+
+function coverageResultText(response) {
+  const parts = [
+    `任务 #${SafetyHub.text(response.job_id)}`,
+    `状态：${SafetyHub.text(response.status)}`,
+    `已处理：${SafetyHub.text(response.processed_count)}`,
+    `已标记：${SafetyHub.text(response.marked_count)}`,
+    `游标：${SafetyHub.text(response.cursor_value)}`
+  ];
+  if (response.error) parts.push("任务返回异常，请查看服务日志。");
+  return parts.join("\n");
 }
 
 async function loadCoverageStatus() {
@@ -759,22 +771,26 @@ async function loadCoverageStatus() {
   if (!target) return;
   const status = await SafetyHub.api("/admin/api/data-governance/coverage/status");
   if (!status.id) {
-    target.innerHTML = `<div class="trend-item"><span>当前任务</span><strong>暂无任务</strong><strong>可手动启动</strong></div>`;
+    target.innerHTML = `<div class="governance-status-card"><span>当前任务</span><strong>暂无任务</strong><strong>可手动启动</strong></div>`;
     return;
   }
-  target.innerHTML = `<div class="trend-item"><span>最近任务 #${status.id}</span><strong>${status.status}</strong><strong>已处理 ${status.processed_count}</strong><strong>标记 ${status.marked_count}</strong><strong>游标 ${status.cursor_value || "-"}</strong></div>`;
+  target.innerHTML = `<div class="governance-status-card"><span>最近任务 #${status.id}</span><strong>${status.status}</strong><strong>已处理 ${status.processed_count}</strong><strong>标记 ${status.marked_count}</strong><strong>游标 ${status.cursor_value || "-"}</strong></div>`;
 }
 
 async function runCoverageAnalysis() {
   const result = document.getElementById("coverageResult");
   result.textContent = "正在执行覆盖分析...";
-  const response = await SafetyHub.api("/admin/api/data-governance/coverage/run", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(coveragePayload())
-  });
-  result.textContent = SafetyHub.json(response);
-  await Promise.all([loadDataGovernanceSummary(), loadCoverageStatus()]);
+  try {
+    const response = await SafetyHub.api("/admin/api/data-governance/coverage/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(coveragePayload())
+    });
+    result.textContent = coverageResultText(response);
+    await Promise.all([loadDataGovernanceSummary(), loadCoverageStatus()]);
+  } catch (error) {
+    result.textContent = "覆盖分析启动失败，请稍后重试或查看服务日志。";
+  }
 }
 
 function dataCleanupPayload() {

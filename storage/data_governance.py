@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import timedelta
 import asyncio
 import json
@@ -55,7 +55,6 @@ class CoverageAnalysisConfig:
     max_records: int = settings.data_governance_coverage_max_records
     batch_size: int = settings.data_governance_coverage_batch_size
     batch_sleep_ms: int = settings.data_governance_coverage_batch_sleep_ms
-    lookback: int = settings.data_governance_coverage_lookback
 
 
 class DataGovernanceService:
@@ -99,7 +98,7 @@ class DataGovernanceService:
                 job_type="coverage_analysis",
                 status="running",
                 requested_by=requested_by,
-                config_snapshot=json.dumps(active_config.__dict__, ensure_ascii=False, separators=(",", ":")),
+                config_snapshot=json.dumps(asdict(active_config), ensure_ascii=False, separators=(",", ":")),
             )
             session.add(job)
             await session.commit()
@@ -155,8 +154,8 @@ class DataGovernanceService:
                     for conversation in conversations:
                         cursor = conversation.id
                         processed += 1
-                        if await _mark_covered_by_candidate(session, conversation, config.lookback):
-                            marked += 1
+                    marked += await _mark_covered_by_group(session, conversations)
+                    for conversation in conversations:
                         conversation.analysis_status = "analyzed"
                         conversation.analyzed_at = utc_now()
                     job.processed_count = processed
@@ -187,28 +186,47 @@ class DataGovernanceService:
         return CoverageAnalysisResult(job_id, status, processed, marked, str(cursor), error)
 
 
-async def _mark_covered_by_candidate(session: AsyncSession, conversation: TrainingConversation, lookback: int) -> bool:
-    trajectory = _parse_trajectory(conversation.trajectory)
-    if len(trajectory) < 2:
-        return False
+async def _mark_covered_by_group(session: AsyncSession, conversations: list[TrainingConversation]) -> int:
+    marked = 0
+    groups: dict[tuple[str, str], list[TrainingConversation]] = {}
+    for conversation in conversations:
+        groups.setdefault((conversation.user_id, conversation.api_key_id), []).append(conversation)
+    for group_conversations in groups.values():
+        covered_ids = {conversation.id for conversation in group_conversations if conversation.covered_by_conversation_id}
+        for conversation in sorted(group_conversations, key=lambda item: item.id, reverse=True):
+            if conversation.id in covered_ids:
+                continue
+            trajectory = _parse_trajectory(conversation.trajectory)
+            if len(trajectory) < 2:
+                continue
+            candidates = await _candidate_conversations(session, conversation)
+            for candidate in candidates:
+                if candidate.id in covered_ids or candidate.covered_by_conversation_id:
+                    covered_ids.add(candidate.id)
+                    continue
+                candidate_trajectory = _parse_trajectory(candidate.trajectory)
+                if _is_prefix_trajectory(candidate_trajectory, trajectory):
+                    candidate.covered_by_conversation_id = conversation.conversation_id
+                    covered_ids.add(candidate.id)
+                    marked += 1
+    return marked
+
+
+async def _candidate_conversations(session: AsyncSession, conversation: TrainingConversation) -> list[TrainingConversation]:
     rows = await session.execute(
         select(TrainingConversation)
         .where(TrainingConversation.id != conversation.id)
         .where(TrainingConversation.covered_by_conversation_id == "")
         .where(TrainingConversation.user_id == conversation.user_id)
         .where(TrainingConversation.api_key_id == conversation.api_key_id)
-        .where(TrainingConversation.model == conversation.model)
         .where(TrainingConversation.id < conversation.id)
         .order_by(TrainingConversation.id.desc())
-        .limit(max(1, lookback))
     )
-    changed = False
-    for candidate in rows.scalars().all():
-        candidate_trajectory = _parse_trajectory(candidate.trajectory)
-        if candidate_trajectory and len(candidate_trajectory) < len(trajectory) and trajectory[: len(candidate_trajectory)] == candidate_trajectory:
-            candidate.covered_by_conversation_id = conversation.conversation_id
-            changed = True
-    return changed
+    return list(rows.scalars().all())
+
+
+def _is_prefix_trajectory(candidate_trajectory: list[dict[str, Any]], trajectory: list[dict[str, Any]]) -> bool:
+    return bool(candidate_trajectory) and len(candidate_trajectory) < len(trajectory) and trajectory[: len(candidate_trajectory)] == candidate_trajectory
 
 
 def _parse_trajectory(value: str) -> list[dict[str, Any]]:

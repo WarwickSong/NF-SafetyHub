@@ -21,34 +21,33 @@
   </nav>
   <main class="content">
     <header class="topbar"><div><h1>数据治理</h1><p>训练数据和审计数据分表保存，分别服务模型沉淀和安全追溯。</p></div><button class="button" data-refresh>刷新</button></header>
-    <section class="card">
+    <section class="card governance-card">
       <h2>保存模型</h2>
-      <div class="trend-list">
-        <div class="trend-item"><span>training_conversations</span><strong>完整训练轨迹</strong><strong>messages + assistant response</strong><small>只保存通过的 chat，对话发起人通过 user_id / api_key_id 追踪。</small></div>
-        <div class="trend-item"><span>audit_logs</span><strong>审计证据</strong><strong>命中片段 + 前后文 + 脱敏后片段</strong><small>不保存完整 message，按审计追溯期销毁。</small></div>
-        <div class="trend-item"><span>message_archives</span><strong>兼容归档</strong><strong>后台现有详情视图</strong><small>保持现有页面和统计兼容，后续可逐步瘦身。</small></div>
+      <div class="governance-model-grid">
+        <div class="governance-model-item"><span>training_conversations</span><strong>完整训练轨迹</strong><em>messages + assistant response</em><small>只保存通过的 chat，对话发起人通过 user_id / api_key_id 追踪。</small></div>
+        <div class="governance-model-item"><span>audit_logs</span><strong>审计证据</strong><em>命中片段 + 前后文 + 脱敏后片段</em><small>不保存完整 message，按审计追溯期销毁。</small></div>
+        <div class="governance-model-item"><span>message_archives</span><strong>兼容归档</strong><em>后台现有详情视图</em><small>保持现有页面和统计兼容，后续可逐步瘦身。</small></div>
       </div>
     </section>
-    <section class="card">
+    <section class="card governance-card">
       <h2>治理摘要</h2>
-      <div id="dataGovernanceSummary" class="trend-list">加载中...</div>
+      <div id="dataGovernanceSummary" class="governance-summary-grid">加载中...</div>
     </section>
-    <section class="card">
+    <section class="card governance-card">
       <h2>覆盖分析</h2>
-      <div id="coverageStatus" class="trend-list">加载中...</div>
-      <div class="filters">
-        <input id="coverageMaxRecords" type="number" min="1" max="100000" value="5000" placeholder="最大记录数">
-        <input id="coverageMaxSeconds" type="number" min="1" max="3600" value="600" placeholder="最大秒数">
-        <input id="coverageBatchSize" type="number" min="1" max="5000" value="200" placeholder="批大小">
-        <input id="coverageBatchSleepMs" type="number" min="0" max="5000" value="200" placeholder="批间暂停ms">
-        <input id="coverageLookback" type="number" min="1" max="5000" value="200" placeholder="回看条数">
+      <div id="coverageStatus" class="governance-status-list">加载中...</div>
+      <div class="governance-filters governance-coverage-filters">
+        <label class="governance-field" for="coverageMaxRecords"><span>最大记录数</span><input id="coverageMaxRecords" type="number" min="1" max="100000" value="5000"><small>本次最多扫描多少条训练记录，越大覆盖越完整。</small></label>
+        <label class="governance-field" for="coverageMaxMinutes"><span>最长运行分钟</span><input id="coverageMaxMinutes" type="number" min="1" max="60" value="10"><small>达到时间上限后自动停止，避免后台任务长时间占用资源。</small></label>
+        <label class="governance-field" for="coverageBatchSize"><span>每批处理量</span><input id="coverageBatchSize" type="number" min="1" max="5000" value="200"><small>每一批读取和分析的记录数量。</small></label>
+        <label class="governance-field" for="coverageBatchSleepMs"><span>批间暂停毫秒</span><input id="coverageBatchSleepMs" type="number" min="0" max="5000" value="200"><small>两批之间的等待时间，用来降低数据库压力。</small></label>
         <button class="button" id="runCoverageAnalysis">启动分析</button>
       </div>
       <pre id="coverageResult">覆盖分析只标记，不删除。</pre>
     </section>
-    <section class="card">
+    <section class="card governance-card">
       <h2>手动清理</h2>
-      <div class="filters">
+      <div class="governance-filters governance-cleanup-filters">
         <label><input id="cleanupTrainingCovered" type="checkbox"> 清理被更长轨迹覆盖的训练记录</label>
         <label><input id="cleanupTrainingExpired" type="checkbox" checked> 清理过期训练记录</label>
         <label><input id="cleanupAuditExpired" type="checkbox" checked> 清理过期审计记录</label>

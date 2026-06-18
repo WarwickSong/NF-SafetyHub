@@ -242,7 +242,6 @@ async def run_data_governance_coverage(request: Request, payload: DataGovernance
             max_records=payload.max_records,
             batch_size=payload.batch_size,
             batch_sleep_ms=payload.batch_sleep_ms,
-            lookback=payload.lookback,
         ),
     )
     await _write_admin_operation(request, "data_governance.coverage_run", "data_governance", f"job={result.job_id};status={result.status}")

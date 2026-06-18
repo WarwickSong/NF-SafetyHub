@@ -69,7 +69,6 @@ class DataGovernanceCoverageRequest(BaseModel):
     max_records: int = Field(default=5000, ge=1, le=100000)
     batch_size: int = Field(default=200, ge=1, le=5000)
     batch_sleep_ms: int = Field(default=200, ge=0, le=5000)
-    lookback: int = Field(default=200, ge=1, le=5000)
 
 
 class DataGovernanceCoverageResponse(BaseModel):
