@@ -76,7 +76,7 @@ verify_bundle_matches_source() {
   rm -f "${list_file}"
 
   local rel tmp_file
-  for rel in docker-compose.yml nginx/nginx.conf 交付运行手册/deploy_intranet_docker.sh; do
+  for rel in docker-compose.yml nginx/nginx.conf 交付运行手册/deploy_intranet_docker.sh scripts/rebuild_runtime_tables_preserve_apikeys.py; do
     tmp_file="$(mktemp)"
     tar -xOzf "${bundle}" "${bundle_root}/NF-SafetyHub/${rel}" > "${tmp_file}"
     if ! cmp -s "${NF_PROJECT_ROOT}/${rel}" "${tmp_file}"; then

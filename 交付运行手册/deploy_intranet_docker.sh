@@ -33,7 +33,7 @@ else
 fi
 
 echo "rebuilding runtime tables while preserving api_keys..."
-docker compose run --rm safetyhub python scripts/rebuild_runtime_tables_preserve_apikeys.py
+docker compose run --rm -e PYTHONPATH=/app safetyhub python scripts/rebuild_runtime_tables_preserve_apikeys.py
 
 if [ "${SAFETYHUB_SKIP_BUILD:-false}" = "true" ]; then
   docker compose up --no-build -d safetyhub nginx

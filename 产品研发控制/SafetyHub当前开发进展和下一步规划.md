@@ -1,8 +1,8 @@
 # LLM-SafetyHub 当前开发进展和下一步规划
 
-> 更新时间：2026-06-11
-> 当前阶段：阶段 6A — 单实例 Docker 生产稳定性与高并发治理
-> 当前状态：阶段 1~6A 核心能力已全部落地（详见第二、三、四章）；2026-06 完成"透明中继兼容性修复"，把 SafetyHub 中继层从 JSON 重序列化改造为字节级透传，能正确处理主流 LLM 客户端（含严格 JSON / 自定义 key 顺序 / 压缩响应 / 流式 SSE / 未知 JSON 端点等场景），同时保留原有扫描 / 脱敏 / 拦截 / 归档全部能力（详见第四 A 章）。历史自动化测试基线为 `94 passed`，当前生产代码已继续演进，测试结果需以当前环境复跑为准；最近一次本地复核为 `96 passed, 2 failed`，失败集中在后台认证测试夹具未初始化归档表，不影响生产运行口径。阶段 7 及之后暂不开发，仅保留长期规划；生产上线前重点转为真实上游联调、高并发阶梯压测、PostgreSQL 稳定性、备份恢复、运维安全配置和生产验收。
+> 更新时间：2026-06-18
+> 当前阶段：阶段 6A — 单实例 Docker 生产稳定性、高并发治理与数据治理交付
+> 当前状态：阶段 1~6A 核心能力已全部落地（详见第二、三、四章）；2026-06 已完成透明中继兼容性修复、训练数据沉淀、数据治理后台、覆盖分析、手动清理和内网 Docker 离线部署数据库保留策略。覆盖分析采用按 `user_id + api_key_id` 分组的确定性 JSON 前缀比较，寻找每组最长有效轨迹集合；不按模型隔离，不使用 lookback，不引入前缀 hash/派生表/外部通信。内网升级部署保留已有 `api_keys` 表，不从 JSON/SQL 重新导入 APIKey，其余当前系统表可按最新模型删除并重建。历史自动化测试基线为 `94 passed`，当前生产代码已继续演进，测试结果需以当前环境复跑为准；最近专项验证包含数据治理覆盖分析测试、离线包 checksum、Compose 配置和当前服务 `/health/ready`。阶段 7 及之后暂不开发，仅保留长期规划；生产上线前重点转为真实上游联调、高并发阶梯压测、PostgreSQL 稳定性、备份恢复、运维安全配置和生产验收。
 
 ---
 
@@ -16,7 +16,7 @@
 
 阶段 6A 当前代码已新增 `middleware/concurrency_limit.py`、`middleware/request_limit.py`、`runtime/upstream_client.py`、`runtime/archive_queue.py`、`runtime/admin_cache.py` 和 `/admin/api/runtime`。`/v1/*` 请求统一进入进程内有界并发队列，代码默认每 worker `V1_MAX_INFLIGHT=150`、`V1_MAX_QUEUE_SIZE=200`；生产环境推荐通过 `.env` 调到每 worker `V1_MAX_INFLIGHT=250`、`V1_MAX_QUEUE_SIZE=500`，4 worker 下容器总目标为 `1000` in-flight + `2000` 排队。队列满或排队超时返回 429，并通过响应头暴露排队等待、在途数和队列数。`/admin/*`、`/admin/api/*`、`/health/*` 不进入该队列。归档/审计写入已通过 `ArchiveQueue` 削峰，支持队列上限、批量写入、处理数和丢弃数快照；上游请求优先复用应用生命周期内的共享 `AsyncClient`，并通过 `.env` 配置最大连接、keepalive 和超时。Dockerfile 当前使用 `uvicorn main:app --workers ${UVICORN_WORKERS:-4}`，不包含 `--reload`。
 
-当前代码尚未具备路径 C 自动续约迁移结果页、Provider 切换演练页、替换后首次请求失败自动回滚、图片资产后台预览/下载页面、图片资产存储配额和清理任务、告警通知、文件安全、审批运行链路和中转站配额/速率只读观测能力。阶段 6A 的高并发能力已具备代码基础，但仍需真实上游和 Docker 生产环境下完成阶梯压测、连接池观测、PostgreSQL 长时间运行、备份恢复、日志脱敏和运维安全复核。
+当前代码尚未具备路径 C 自动续约迁移结果页、Provider 切换演练页、替换后首次请求失败自动回滚、图片资产后台预览/下载页面、图片资产存储配额和清理任务、告警通知、文件安全、审批运行链路和中转站配额/速率只读观测能力。阶段 6A 的高并发能力已具备代码基础；数据治理能力已具备训练数据沉淀、覆盖分析、预览清理和手动清理基础闭环；仍需真实上游和 Docker 生产环境下完成阶梯压测、连接池观测、PostgreSQL 长时间运行、备份恢复、日志脱敏、数据清理演练和运维安全复核。
 
 ---
 
@@ -30,7 +30,7 @@
 | 阶段 4 | 管理员认证 + 最小后台 | ✅ 已完成 | Basic Auth + IP 白名单、表单登录、后台静态页面鉴权、归档/审计/统计 API、规则管理 API、运行状态 API、管理员操作审计和最小静态后台已完成 |
 | 阶段 5 | APIKey 管理 | ✅ 已完成 | `middleware/identity.py`、`governance/api_keys.py`、K-Sync 创建、加密存储、APIKey 有效性校验、上游 Key 映射、后台 CRUD、reveal、单条替换、CSV 批量替换和删除已吊销 Key 已完成；模型/token/资源能力权限由中转站负责 |
 | 阶段 6 | KeyProvider + 中转站联通 | ✅ 核心能力已完成 | 已实现 Provider 抽象、`passthrough/static/oneapi_nanfu_yxai`、后台 Provider 创建、reveal/复制完整 Key、Provider-aware 吊销、`.env` 配置和 JSON 导入 |
-| 阶段 6A | 单实例 Docker 生产稳定性与高并发治理 | 🔄 工程能力已落地，待生产压测验收 | `/v1/*` 有界并发队列、请求体大小限制、共享上游连接池、归档/审计队列、后台统计缓存、`/admin/api/runtime`、Docker worker 启动和配置项已实现；仍需真实生产环境阶梯压测、连接池观测和运维验收 |
+| 阶段 6A | 单实例 Docker 生产稳定性、高并发治理与数据治理交付 | 🔄 工程能力已落地，待生产压测和运维演练验收 | `/v1/*` 有界并发队列、请求体大小限制、共享上游连接池、归档/审计队列、后台统计缓存、`/admin/api/runtime`、Docker worker 启动、训练数据沉淀、数据治理页面、覆盖分析、预览清理、手动清理和离线部署数据库保留策略已实现；仍需真实生产环境阶梯压测、连接池观测、数据清理演练和运维验收 |
 | 阶段 7 | 扫描升级 | ⏸️ 暂不开发 | 当前仅保留规划记录，不进入近期开发；生产上线前不扩展完整 PII、分级策略和误报回归体系，继续使用阶段 2 已验证的低干扰规则集 |
 | 阶段 8 | 可观测性 + 告警 | ⏸️ 暂不开发 | 当前仅保留规划记录，不进入近期开发；生产上线前不新增 Prometheus 指标、Webhook 告警、审计导出、图片资产后台预览/下载页面、存储配额和保留策略 |
 | 阶段 9 | 审批 + 安全策略 + 审批链 | ⏸️ 暂不开发 | 当前仅保留规划记录，不进入近期开发；生产上线前不启用审批运行链路、策略绑定运行逻辑和审批链路由 |
@@ -69,7 +69,11 @@
 | 运行状态 API | `admin/router.py`、`admin/schemas.py`、`admin/static/js/app.js`、`admin/static/index.html` | `/admin/api/runtime` 返回 worker pid、配置 worker 数、`/v1` 并发快照、归档队列快照、上游连接池配置和后台缓存配置；仪表盘可展示运行状态 |
 | Docker 生产启动 | `Dockerfile`、`docker-compose.yml`、`.env.example` | Dockerfile 使用多 worker 生产命令，不使用 `--reload`；Compose 包含 PostgreSQL、SafetyHub、Nginx 和健康检查；`.env.example` 包含阶段 6A 配置项 |
 | 透明中继兼容性修复（2026-06） | `proxy/relay.py`、`proxy/stream.py`、`proxy/header_policy.py` | 未脱敏请求改为 `content=raw_body` 字节透传，避免 httpx 重序列化破坏严格 JSON / 上游签名；流式 SSE 同步支持 `raw_body`；新增 `filter_response_headers` 统一剥离 hop-by-hop / `Content-Length` / `Content-Encoding`；非 `KNOWN_JSON_ENDPOINTS` 端点 JSON 解析失败由 400 降级为字节透传；64/64 中继相关测试通过 |
-| 自动化测试 | `tests/` | 历史全量测试基线为 `94 passed`；当前代码新增测试后最近一次本地复核为 `96 passed, 2 failed`，失败点集中在后台认证测试夹具未初始化 `message_archives` 表。该差异属于测试夹具与当前生产代码演进不同步，生产能力判断以专项测试、Docker/真实上游验收和当前环境复跑结果为准 |
+| 训练数据沉淀 | `storage/training.py`、`storage/models.py`、`proxy/relay.py` | Chat 请求 messages 与 assistant response 形成规范化 `trajectory`，写入 `training_conversations`，用于后续离线训练数据筛选；`analysis_status`、`covered_by_conversation_id`、`expires_at` 支持治理状态追踪 |
+| 数据治理后台 | `storage/data_governance.py`、`admin/router.py`、`admin/static/data_governance.html`、`admin/static/js/app.js` | `/admin/api/data-governance/*` 支持治理摘要、覆盖分析启动/状态、清理预览和手动清理；页面提供保存模型摘要、治理摘要、覆盖分析参数和清理入口 |
+| 覆盖分析算法 | `storage/data_governance.py`、`tests/test_data_governance.py` | 按 `user_id + api_key_id` 分组，倒序扫描每组记录，跳过已覆盖项，只做确定性 JSON 前缀比较；目标是保留每组最长有效轨迹集合；不按 `model` 分组，不使用 lookback，不引入 hash 派生表或外部通信 |
+| 内网部署数据库保留策略 | `scripts/rebuild_runtime_tables_preserve_apikeys.py`、`交付运行手册/deploy_intranet_docker.sh` | 内网 Docker 升级时保留已有 `api_keys` 表，删除并重建当前系统需要的其他 SQLAlchemy 模型表；不从 JSON/SQL 重新导入 APIKey，避免覆盖内网已运行数据 |
+| 自动化测试 | `tests/` | 历史全量测试基线为 `94 passed`；当前代码新增测试后最近一次本地复核为 `96 passed, 2 failed`，失败点集中在后台认证测试夹具未初始化 `message_archives` 表。新增数据治理专项测试覆盖跨模型同 user/key 的最长轨迹保留逻辑；生产能力判断以专项测试、Docker/真实上游验收和当前环境复跑结果为准 |
 
 ---
 

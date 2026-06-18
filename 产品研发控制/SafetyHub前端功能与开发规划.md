@@ -44,6 +44,7 @@ admin/static/
 ├── rules.html          # 规则管理
 ├── approvals.html      # 临时审批记录预留
 ├── api_keys.html       # APIKey 映射与上游 Key 替换
+├── data_governance.html # 数据治理：训练数据覆盖分析、清理预览和手动清理
 ├── settings.html       # 系统设置
 ├── css/
 │   └── style.css
@@ -70,6 +71,7 @@ admin/static/
 | 系统设置 | `/admin/settings` | P1 | 阶段 4 / 阶段 6 增强 | 展示配置、Webhook、健康状态、Provider 类型 |
 | 运行状态 | `/admin/settings` 或仪表盘区块 | P0 | 阶段 6A | 展示单实例 `/v1/*` 在途、排队、拒绝、归档队列、上游连接池和统计缓存状态，以及默认 4 worker 下容器总 `1000` in-flight + `2000` 排队目标 |
 | APIKey 映射 | `/admin/api-keys` | P0 | 阶段 5 / 阶段 6 增强 | APIKey、K-Sync、上游替换、Provider 创建；模型/token/资源权限跳转中转站管理 |
+| 数据治理 | `/admin/data_governance.html` | P0 | 阶段 6A 数据治理交付 | 展示训练数据/审计数据摘要，启动覆盖分析，预览和执行清理；覆盖分析参数使用最大记录数、最长运行分钟、批处理量、批间暂停 |
 | 审批记录 | `/admin/approvals` | P2 | 阶段 9 | 临时审批记录与处理状态 |
 | 文件安全 | `/admin/files` | P2 | 阶段 10 | 文件扫描、拦截、脱敏记录；当前阶段未创建独立页面 |
 
@@ -757,7 +759,7 @@ admin/static/
 | Provider-aware 吊销 | 中转站删除成功后才标记本地 revoked，失败时返回错误不假成功 |
 | Provider 切换演练 | 验证 `oneapi_nanfu_yxai` ↔ `static` 切换时前端和核心链路零改动 |
 | 自动续约迁移 | 展示迁移进度、成功/失败、失败重试，作为阶段 6 迁移增强待实现 |
-| 批量导入增强 | CSV / 表单粘贴 / 导入结果页，作为后续增强；当前已有 JSON 导入脚本能力 |
+| 批量导入增强 | CSV / 表单粘贴 / 导入结果页，作为后续增强；当前生产离线升级不从 JSON/SQL 重新导入 APIKey，内网已有 `api_keys` 表继续使用 |
 
 **验收标准**
 

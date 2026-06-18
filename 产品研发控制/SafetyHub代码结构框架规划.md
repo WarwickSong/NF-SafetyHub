@@ -6,7 +6,7 @@
 
 ## 一、项目目录结构
 
-当前代码结构如下；阶段 1~6 核心能力已落地，KeyProvider 抽象、Provider 实现、APIKey 管理、文生图图片资产归档和后台页面已进入当前结构。当前开发范围收敛到阶段 6A 单实例 Docker 生产稳定性与高并发治理；阶段 7 及之后暂不开发，告警、图片资产治理增强、文件安全运行模块仅保留规划，不作为当前上线阻塞项。
+当前代码结构如下；阶段 1~6 核心能力已落地，KeyProvider 抽象、Provider 实现、APIKey 管理、文生图图片资产归档、训练数据沉淀、数据治理后台和内网 Docker 离线部署数据库保留策略已进入当前结构。当前开发范围收敛到阶段 6A 单实例 Docker 生产稳定性、高并发治理与数据治理交付；阶段 7 及之后暂不开发，告警、图片资产治理增强、文件安全运行模块仅保留规划，不作为当前上线阻塞项。
 
 ```text
 NF-SafetyHub/
@@ -47,9 +47,11 @@ NF-SafetyHub/
 │   ├── admin_ops.py
 │   ├── archive.py
 │   ├── audit.py
+│   ├── data_governance.py
 │   ├── database.py
 │   ├── image_assets.py
-│   └── models.py
+│   ├── models.py
+│   └── training.py
 ├── admin/
 │   ├── router.py
 │   ├── schemas.py
@@ -58,6 +60,7 @@ NF-SafetyHub/
 │       ├── approvals.html
 │       ├── archives.html
 │       ├── blocks.html
+│       ├── data_governance.html
 │       ├── index.html
 │       ├── login.html
 │       ├── observations.html
@@ -79,6 +82,7 @@ NF-SafetyHub/
 │   ├── init_db.py
 │   ├── migrate_apikeys_to_fernet.py
 │   ├── migrate_sqlite_to_postgres.py
+│   ├── rebuild_runtime_tables_preserve_apikeys.py
 │   └── verify_postgres_migration.py
 ├── tests/
 │   ├── test_admin_auth.py
@@ -88,6 +92,7 @@ NF-SafetyHub/
 │   ├── test_archive.py
 │   ├── test_audit.py
 │   ├── test_concurrency_limit.py
+│   ├── test_data_governance.py
 │   ├── test_fake_response.py
 │   ├── test_header_policy.py
 │   ├── test_health.py

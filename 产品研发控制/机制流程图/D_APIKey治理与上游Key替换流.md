@@ -33,7 +33,7 @@ flowchart TD
         KSync --> Record
         NewKey --> Record
         Record["ApiKeyRecord 入库<br/>id / key_prefix / key_suffix<br/>encrypted_safetyhub_key<br/>encrypted_upstream_key<br/>owner_user_id / department / cost_center<br/>provider_name / expires_at"]
-        Record --> DB[("PostgreSQL<br/>api_key_record")]
+        Record --> DB[("PostgreSQL<br/>api_keys")]
         Record --> Return["返回给管理员一次性明文<br/>(后续仅可 reveal)"]
     end
 

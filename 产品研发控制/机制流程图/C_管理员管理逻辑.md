@@ -16,7 +16,7 @@ flowchart TD
     IPCheck -- "否" --> Forbidden["403 Admin access denied"]
     IPCheck -- "是" --> SessionCheck{"safetyhub_admin_session<br/>cookie HMAC 校验 ?"}
     SessionCheck -- "无效/过期" --> Redirect["302 → /admin/login.html?next=..."]
-    SessionCheck -- "有效" --> StaticPage["返回对应 HTML 页面<br/>(index/archives/audits/...)"]
+    SessionCheck -- "有效" --> StaticPage["返回对应 HTML 页面<br/>(index/archives/data_governance/...)"]
 
     LoginPage --> LoginPost["POST /admin/api/login<br/>{username, password}"]
     LoginPost --> ValidateLogin{"validate_admin_login<br/>secrets.compare_digest"}
@@ -27,7 +27,7 @@ flowchart TD
 
     StaticPage --> AdminAPI["调用 /admin/api/*<br/>(全部走 require_admin_access 依赖)"]
 
-    AdminAPI --> Modules{"管理后台 8 大模块"}
+    AdminAPI --> Modules{"管理后台 10 大模块"}
 
     %% ===== 仪表盘 =====
     Modules --> Stats["1. 仪表盘<br/>GET /admin/api/stats"]
@@ -41,7 +41,7 @@ flowchart TD
     %% ===== 消息归档 =====
     Modules --> Archives["3. 消息归档<br/>GET /admin/api/archives?<br/>user/model/action/keyword/时间窗"]
     Archives --> ArchiveReader["ArchiveReader.list / get / stats"]
-    ArchiveReader --> DBArch[("PostgreSQL<br/>message_archive")]
+    ArchiveReader --> DBArch[("PostgreSQL<br/>message_archives")]
 
     %% ===== 图片资产 =====
     Modules --> Images["4. 图片资产<br/>GET /admin/api/image-assets"]
@@ -50,7 +50,7 @@ flowchart TD
     %% ===== 审计追溯 =====
     Modules --> Audits["5. 审计追溯<br/>GET /admin/api/audits"]
     Audits --> AuditReader["AuditReader.list / get<br/>按 rule_id/level/scanner_type 过滤"]
-    AuditReader --> DBAudit[("PostgreSQL<br/>audit_log")]
+    AuditReader --> DBAudit[("PostgreSQL<br/>audit_logs")]
 
     %% ===== 观测 =====
     Modules --> Obs["6. 观测<br/>GET /admin/api/observations/recent"]
@@ -66,7 +66,12 @@ flowchart TD
     Modules --> Keys["8. APIKey 治理<br/>GET/POST/PATCH/DELETE /admin/api/api-keys<br/>POST /api-keys/{id}/replace<br/>POST /api-keys/{id}/reveal<br/>POST /api-keys/bulk-replace (CSV)"]
     Keys --> KeyService["ApiKeyService<br/>(Fernet 加密 / 校验 / 吊销)"]
     KeyService --> KeyProvider["KeyProvider<br/>(passthrough / static / oneapi_nanfu_yxai)"]
-    KeyProvider --> DBKeys[("PostgreSQL<br/>api_key_record (密文)")]
+    KeyProvider --> DBKeys[("PostgreSQL<br/>api_keys (密文)")]
+
+    %% ===== 数据治理 =====
+    Modules --> Governance["9. 数据治理<br/>GET /data-governance/summary<br/>POST /coverage/run<br/>POST /cleanup/preview<br/>POST /cleanup"]
+    Governance --> GovernanceService["DataGovernanceService<br/>覆盖分析 / 清理预览 / 手动清理"]
+    GovernanceService --> DBGov[("PostgreSQL<br/>training_conversations<br/>data_governance_jobs<br/>audit_logs")]
 
     %% ===== 操作留痕 =====
     Stats --> OpsLog
@@ -76,10 +81,11 @@ flowchart TD
     Audits --> OpsLog
     Rules --> OpsLog
     Keys --> OpsLog
+    Governance --> OpsLog
     OpsLog["_write_admin_operation<br/>记录 admin 用户 + 操作 + 资源"]
-    OpsLog --> DBOps[("PostgreSQL<br/>admin_operation")]
+    OpsLog --> DBOps[("PostgreSQL<br/>admin_operations")]
 
-    Modules --> OpsView["9. 操作留痕查看<br/>GET /admin/api/admin-ops"]
+    Modules --> OpsView["10. 操作留痕查看<br/>GET /admin/api/admin-ops"]
     OpsView --> DBOps
 
     classDef auth fill:#e3f2fd,stroke:#1976d2,color:#000
@@ -96,5 +102,5 @@ flowchart TD
 - **双通道认证**：cookie 失效时也可走 HTTP Basic（`WWW-Authenticate: Basic`），便于脚本/curl 访问。
 - **IP 白名单**：`ADMIN_IP_WHITELIST` 非空时强制校验，支持精确 IP 与 CIDR 网段。
 - **/admin/api/* 全量受护**：`router = APIRouter(dependencies=[Depends(require_admin_access)])`，仅 `/login` 和 `/logout` 例外。
-- **操作留痕**：除查询类只读接口外，所有写操作经 `_write_admin_operation` 落 `admin_operation` 表。
+- **操作留痕**：除查询类只读接口外，所有写操作经 `_write_admin_operation` 落 `admin_operations` 表。
 - **stats 短缓存**：避免高频刷新仪表盘时打爆 PostgreSQL。

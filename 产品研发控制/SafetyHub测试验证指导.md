@@ -1,7 +1,7 @@
 # LLM-SafetyHub 测试验证指导
 
 > 本文档定义 SafetyHub 在 Windows、Linux、Docker 和真实上游联调场景下的测试方法、注意事项和验收标准。  
-> 当前重点覆盖阶段 1 透传中继 + 健康检查、阶段 2 检测/拦截/请求侧手机号脱敏/伪装回复/规则启停/规则热加载链路、阶段 3 Chat 非流式/流式归档、文生图元数据归档、图片本体异步归档、图片资产状态 API、审计写入、最近对话观测 API、R1~R9 schema 预留、阶段 4 管理后台、阶段 5 APIKey 管理、K-Sync 默认、加密存储、APIKey 有效性校验、单条/CSV 批量替换上游 Key，以及阶段 6 KeyProvider 抽象、`passthrough` / `static` / `oneapi_nanfu_yxai` Provider、Provider 创建、reveal/复制、Provider-aware 吊销和历史 Key JSON 导入。模型权限、token 额度和资源能力权限由中转站验证。阶段 7 及之后暂不开发；当前测试重点收敛到阶段 6A 单实例 Docker 生产稳定性与高并发治理，自动续约迁移、Provider 切换演练、审计告警、图片资产预览下载页面和存储治理仅保留为长期规划。
+> 当前重点覆盖阶段 1 透传中继 + 健康检查、阶段 2 检测/拦截/请求侧手机号脱敏/伪装回复/规则启停/规则热加载链路、阶段 3 Chat 非流式/流式归档、训练数据沉淀、文生图元数据归档、图片本体异步归档、图片资产状态 API、审计写入、最近对话观测 API、R1~R9 schema 预留、阶段 4 管理后台、阶段 5 APIKey 管理、K-Sync 默认、加密存储、APIKey 有效性校验、单条/CSV 批量替换上游 Key、阶段 6 KeyProvider 抽象与 Provider 创建/吊销，以及阶段 6A 高并发治理、数据治理覆盖分析和内网离线部署数据库保留策略。模型权限、token 额度和资源能力权限由中转站验证。阶段 7 及之后暂不开发；当前测试重点收敛到阶段 6A 单实例 Docker 生产稳定性、高并发治理、数据治理和部署验收，自动续约迁移、Provider 切换演练、审计告警、图片资产预览下载页面和存储治理仅保留为长期规划。
 
 ---
 
@@ -121,7 +121,10 @@ chmod +x 交付运行手册/*.sh
 ./交付运行手册/verify_engine.sh
 ./交付运行手册/verify_relay.sh
 ./交付运行手册/verify_venv.sh
+.venv/bin/python -m pytest tests/test_data_governance.py
 ```
+
+`tests/test_data_governance.py` 用于验证当前覆盖分析核心语义：跨模型但同 `user_id + api_key_id` 的短轨迹可被最长轨迹覆盖，不同 user/key 不串组。
 
 ### 4.5 本地服务测试
 
@@ -181,7 +184,8 @@ docker compose up --build -d
 
 - Docker 启动命令不得包含 `--reload`。
 - `/admin/*`、`/admin/api/*`、`/health/*` 不进入 `/v1/*` 并发队列。
-- 当前 APIKey 已完成 SQLite 到 PostgreSQL 迁移，运行 `.env` 已切换 PostgreSQL；上线验证需确认 `/health/ready` 中 `database=true`，并确认 `api_keys: sqlite=23 postgres=23 OK`。
+- 当前 APIKey 已完成 SQLite 到 PostgreSQL 迁移，运行 `.env` 已切换 PostgreSQL；上线验证需确认 `/health/ready` 中 `database=true`。
+- 内网离线升级部署采用“保留 `api_keys`，重建其他当前系统表”的策略：部署前必须确认 `SAFETYHUB_POSTGRES_DATA_DIR`、`POSTGRES_DB`、`POSTGRES_USER`、`POSTGRES_PASSWORD`、`DB_URL` 指向旧内网数据库；部署过程不从 JSON/SQL 重新导入 APIKey。
 - 如后续短期回退 SQLite，应确认 WAL、busy timeout、归档截断和后台统计缓存策略已启用；高并发生产默认按 PostgreSQL 口径验证。
 
 ### 5.3 验证

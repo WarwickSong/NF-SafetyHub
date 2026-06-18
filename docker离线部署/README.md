@@ -135,7 +135,7 @@ sudo bash scripts/install.sh
    并在 `/usr/local/bin/docker-compose` 留软链接。
 3. 注册并启动 `containerd.service` / `docker.socket` / `docker.service`。
 4. 解压 `app-bundle/safetyhub_intranet_bundle_*.tar.gz` 到 `app-bundle/_extracted/`，
-   调用其内置 `install.sh`：`docker load` 镜像 → `docker compose up -d`。
+   调用其内置 `install.sh`：`docker load` 镜像 → 启动 PostgreSQL → 保留 `api_keys` 表并重建其他业务表 → 启动 SafetyHub/Nginx。
 
 可选环境变量：
 
@@ -237,6 +237,8 @@ sudo SKIP_DOCKER_INSTALL=true bash scripts/install.sh
 
 如需同时升级 docker 引擎本身，先 `sudo bash scripts/uninstall.sh`，
 再正常 `sudo bash scripts/install.sh`。
+
+本次应用部署会保留内网 PostgreSQL 里的 `api_keys` 表，删除并重建其他 SafetyHub 业务表；不会从 JSON/SQL 重新导入 APIKey。执行前请确认应用包内 `NF-SafetyHub/.env` 的 `SAFETYHUB_POSTGRES_DATA_DIR`、`POSTGRES_DB`、`POSTGRES_USER`、`POSTGRES_PASSWORD`、`DB_URL` 指向旧内网数据库。
 
 ### 5. 验证
 

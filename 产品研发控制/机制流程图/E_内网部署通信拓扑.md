@@ -34,7 +34,7 @@ flowchart LR
 
             subgraph DBBox["容器: safetyhub-postgres (postgres:16-alpine)"]
                 PG["PostgreSQL 5432<br/>asyncpg + SQLAlchemy<br/>healthcheck: pg_isready"]
-                PGTables[("表:<br/>message_archive<br/>audit_log<br/>image_asset<br/>api_key_record<br/>admin_operation")]
+                PGTables[("表:<br/>message_archives<br/>training_conversations<br/>data_governance_jobs<br/>audit_logs<br/>image_assets<br/>api_keys<br/>admin_operations")]
                 PG --> PGTables
             end
         end
@@ -126,5 +126,6 @@ flowchart LR
 内网无外网时通过 `docker离线部署/scripts/install.sh` 安装：
 
 1. `docker-offline-deploy_*.tar.gz` 内含 Docker + Compose 二进制、systemd 单元、`safetyhub_intranet_bundle_*.tar.gz`。
-2. `install.sh` 安装 Docker 引擎 → 加载本地 `safetyhub-app:*.tar` 镜像 → 启动 Compose。
-3. SafetyHub 仅需出网到企业内部的中转站（OneAPI / YXAI），不需要直连 OpenAI。
+2. `install.sh` 安装 Docker 引擎 → 解压应用离线包 → `docker load` SafetyHub/PostgreSQL/Nginx 镜像 → 启动 PostgreSQL。
+3. 应用部署脚本执行 `scripts/rebuild_runtime_tables_preserve_apikeys.py`：保留内网已有 `api_keys` 表，不从 JSON/SQL 重新导入 APIKey；删除并重建当前系统需要的其他表。
+4. 启动 SafetyHub 和 Nginx；SafetyHub 仅需出网到企业内部的中转站（OneAPI / YXAI），不需要直连 OpenAI。
