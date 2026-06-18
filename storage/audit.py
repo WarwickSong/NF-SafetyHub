@@ -19,6 +19,7 @@ class AuditPayload:
     action_taken: str
     user_id: str = ""
     scanned_text: str = ""
+    desensitized_text: str = ""
 
 
 @dataclass(slots=True)
@@ -123,6 +124,8 @@ def _logs_from_payload(payload: AuditPayload) -> list[AuditLog]:
             rule_level=result.level,
             scanner_type=result.scanner_type,
             matched_snippet=result.matched_text,
+            context_snippet=_context_snippet(payload.scanned_text, result.matched_text),
+            desensitized_snippet=_context_snippet(payload.desensitized_text, result.matched_text) if payload.desensitized_text else "",
             full_text_hash=full_text_hash,
             action_taken=payload.action_taken,
         )
@@ -150,6 +153,9 @@ def _audit_filters(query: AuditQuery) -> list[Any]:
     return filters
 
 
+AUDIT_CONTEXT_CHARS = 80
+
+
 def _extract_results(scan_result: AggregatedScanResult | ScannerResult) -> list[ScannerResult]:
     if isinstance(scan_result, ScannerResult):
         return [scan_result]
@@ -160,6 +166,19 @@ def _normalized_text(scan_result: AggregatedScanResult | ScannerResult) -> str:
     if isinstance(scan_result, AggregatedScanResult):
         return scan_result.normalized_text
     return ""
+
+
+def _context_snippet(text: str, matched_text: str) -> str:
+    if not text:
+        return ""
+    if not matched_text:
+        return text[: AUDIT_CONTEXT_CHARS * 2]
+    index = text.find(matched_text)
+    if index < 0:
+        return text[: AUDIT_CONTEXT_CHARS * 2]
+    start = max(0, index - AUDIT_CONTEXT_CHARS)
+    end = min(len(text), index + len(matched_text) + AUDIT_CONTEXT_CHARS)
+    return text[start:end]
 
 
 def _hash_text(text: str) -> str:

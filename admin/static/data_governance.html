@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>数据治理 - SafetyHub</title>
+  <link rel="stylesheet" href="/admin/css/style.css">
+</head>
+<body data-page="dataGovernance">
+  <nav class="sidebar">
+    <div class="brand">SafetyHub</div>
+    <a href="/admin/index.html">仪表盘</a>
+    <a href="/admin/archives.html">消息归档</a>
+    <a href="/admin/blocks.html">拦截审计</a>
+    <a href="/admin/observations.html">上线观测</a>
+    <a href="/admin/rules.html">规则</a>
+    <a href="/admin/api_keys.html">APIKey</a>
+    <a href="/admin/approvals.html">审批</a>
+    <a class="active" href="/admin/data_governance.html">数据治理</a>
+    <a href="/admin/settings.html">设置</a>
+  </nav>
+  <main class="content">
+    <header class="topbar"><div><h1>数据治理</h1><p>训练数据和审计数据分表保存，分别服务模型沉淀和安全追溯。</p></div><button class="button" data-refresh>刷新</button></header>
+    <section class="card">
+      <h2>保存模型</h2>
+      <div class="trend-list">
+        <div class="trend-item"><span>training_conversations</span><strong>完整训练轨迹</strong><strong>messages + assistant response</strong><small>只保存通过的 chat，对话发起人通过 user_id / api_key_id 追踪。</small></div>
+        <div class="trend-item"><span>audit_logs</span><strong>审计证据</strong><strong>命中片段 + 前后文 + 脱敏后片段</strong><small>不保存完整 message，按审计追溯期销毁。</small></div>
+        <div class="trend-item"><span>message_archives</span><strong>兼容归档</strong><strong>后台现有详情视图</strong><small>保持现有页面和统计兼容，后续可逐步瘦身。</small></div>
+      </div>
+    </section>
+    <section class="card">
+      <h2>治理摘要</h2>
+      <div id="dataGovernanceSummary" class="trend-list">加载中...</div>
+    </section>
+    <section class="card">
+      <h2>覆盖分析</h2>
+      <div id="coverageStatus" class="trend-list">加载中...</div>
+      <div class="filters">
+        <input id="coverageMaxRecords" type="number" min="1" max="100000" value="5000" placeholder="最大记录数">
+        <input id="coverageMaxSeconds" type="number" min="1" max="3600" value="600" placeholder="最大秒数">
+        <input id="coverageBatchSize" type="number" min="1" max="5000" value="200" placeholder="批大小">
+        <input id="coverageBatchSleepMs" type="number" min="0" max="5000" value="200" placeholder="批间暂停ms">
+        <input id="coverageLookback" type="number" min="1" max="5000" value="200" placeholder="回看条数">
+        <button class="button" id="runCoverageAnalysis">启动分析</button>
+      </div>
+      <pre id="coverageResult">覆盖分析只标记，不删除。</pre>
+    </section>
+    <section class="card">
+      <h2>手动清理</h2>
+      <div class="filters">
+        <label><input id="cleanupTrainingCovered" type="checkbox"> 清理被更长轨迹覆盖的训练记录</label>
+        <label><input id="cleanupTrainingExpired" type="checkbox" checked> 清理过期训练记录</label>
+        <label><input id="cleanupAuditExpired" type="checkbox" checked> 清理过期审计记录</label>
+        <input id="cleanupLimit" type="number" min="1" max="10000" value="1000" placeholder="单次上限">
+        <button class="button secondary" id="previewDataCleanup">预览清理</button>
+        <button class="button" id="runDataCleanup">执行清理</button>
+      </div>
+      <pre id="dataGovernanceResult">先点击“预览清理”查看影响范围。</pre>
+    </section>
+  </main>
+  <script src="/admin/js/app.js"></script>
+</body>
+</html>

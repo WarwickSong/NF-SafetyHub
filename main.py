@@ -23,6 +23,8 @@ from runtime.upstream_client import create_upstream_client
 from storage.archive import ArchiveWriter
 from storage.audit import AuditWriter
 from storage.database import close_db, get_session_factory, init_db
+from storage.data_governance import DataGovernanceService
+from storage.training import TrainingConversationWriter
 from governance.api_keys import ApiKeyService
 from governance.key_provider import create_key_provider
 
@@ -53,7 +55,9 @@ async def lifespan(app: FastAPI):
     app.state.upstream_client = create_upstream_client()
     app.state.archive_writer = ArchiveWriter(app.state.session_factory)
     app.state.audit_writer = AuditWriter(app.state.session_factory)
-    app.state.archive_queue = ArchiveQueue(app.state.archive_writer, app.state.audit_writer)
+    app.state.training_writer = TrainingConversationWriter(app.state.session_factory)
+    app.state.data_governance_service = DataGovernanceService(app.state.session_factory)
+    app.state.archive_queue = ArchiveQueue(app.state.archive_writer, app.state.audit_writer, app.state.training_writer)
     app.state.archive_queue.start()
     app.state.admin_stats_cache = AdminStatsCache()
     app.state.rules_reload_task = reload_task

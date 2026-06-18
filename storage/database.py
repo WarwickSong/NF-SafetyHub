@@ -26,7 +26,7 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await _configure_sqlite(conn)
         await conn.run_sync(Base.metadata.create_all)
-        await _ensure_sqlite_legacy_columns(conn)
+        await _ensure_legacy_columns(conn)
 
 
 async def close_db() -> None:
@@ -64,6 +64,26 @@ SQLITE_LEGACY_COLUMNS = {
     "audit_logs": {
         "approval_id": "VARCHAR(64) DEFAULT NULL",
         "security_policy_id": "VARCHAR(64) DEFAULT NULL",
+        "context_snippet": "TEXT DEFAULT ''",
+        "desensitized_snippet": "TEXT DEFAULT ''",
+    },
+    "training_conversations": {
+        "messages": "TEXT DEFAULT ''",
+        "assistant_response": "TEXT DEFAULT ''",
+        "trajectory": "TEXT DEFAULT ''",
+        "analysis_status": "VARCHAR(32) DEFAULT 'pending'",
+        "analyzed_at": "DATETIME DEFAULT NULL",
+    },
+    "data_governance_jobs": {
+        "requested_by": "VARCHAR(128) DEFAULT ''",
+        "processed_count": "INTEGER DEFAULT 0",
+        "marked_count": "INTEGER DEFAULT 0",
+        "deleted_count": "INTEGER DEFAULT 0",
+        "cursor_value": "VARCHAR(128) DEFAULT ''",
+        "config_snapshot": "TEXT DEFAULT '{}'",
+        "error": "TEXT DEFAULT ''",
+        "updated_at": "DATETIME DEFAULT CURRENT_TIMESTAMP",
+        "finished_at": "DATETIME DEFAULT NULL",
     },
     "api_keys": {
         "key_prefix": "VARCHAR(16) DEFAULT ''",
@@ -89,12 +109,43 @@ SQLITE_LEGACY_COLUMNS = {
 }
 
 
+POSTGRES_LEGACY_COLUMNS = {
+    "audit_logs": {
+        "context_snippet": "TEXT DEFAULT ''",
+        "desensitized_snippet": "TEXT DEFAULT ''",
+    },
+    "training_conversations": {
+        "messages": "TEXT DEFAULT ''",
+        "assistant_response": "TEXT DEFAULT ''",
+        "trajectory": "TEXT DEFAULT ''",
+        "analysis_status": "VARCHAR(32) DEFAULT 'pending'",
+        "analyzed_at": "TIMESTAMP WITH TIME ZONE DEFAULT NULL",
+    },
+    "data_governance_jobs": {
+        "requested_by": "VARCHAR(128) DEFAULT ''",
+        "processed_count": "INTEGER DEFAULT 0",
+        "marked_count": "INTEGER DEFAULT 0",
+        "deleted_count": "INTEGER DEFAULT 0",
+        "cursor_value": "VARCHAR(128) DEFAULT ''",
+        "config_snapshot": "TEXT DEFAULT '{}'",
+        "error": "TEXT DEFAULT ''",
+        "updated_at": "TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP",
+        "finished_at": "TIMESTAMP WITH TIME ZONE DEFAULT NULL",
+    },
+}
+
+
 async def _configure_sqlite(conn) -> None:
     if not settings.db_url.startswith("sqlite+aiosqlite:///"):
         return
     await conn.execute(text("PRAGMA journal_mode=WAL"))
     await conn.execute(text("PRAGMA synchronous=NORMAL"))
     await conn.execute(text("PRAGMA busy_timeout=30000"))
+
+
+async def _ensure_legacy_columns(conn) -> None:
+    await _ensure_sqlite_legacy_columns(conn)
+    await _ensure_postgres_legacy_columns(conn)
 
 
 async def _ensure_sqlite_legacy_columns(conn) -> None:
@@ -107,6 +158,14 @@ async def _ensure_sqlite_legacy_columns(conn) -> None:
             if column_name in existing_columns:
                 continue
             await conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}"))
+
+
+async def _ensure_postgres_legacy_columns(conn) -> None:
+    if not settings.db_url.startswith("postgresql+asyncpg://"):
+        return
+    for table_name, columns in POSTGRES_LEGACY_COLUMNS.items():
+        for column_name, column_definition in columns.items():
+            await conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {column_name} {column_definition}"))
 
 
 def _ensure_sqlite_parent_dir() -> None:

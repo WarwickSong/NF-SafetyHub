@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from storage.database import get_session_factory
 from storage.models import MessageArchive, utc_now
+from config import settings
 
 
 @dataclass(slots=True)
@@ -163,10 +164,10 @@ def _archive_from_payload(payload: ArchivePayload) -> MessageArchive:
         api_key_id=payload.api_key_id,
         model=payload.model,
         capability=payload.capability,
-        prompt=_serialize_json(payload.prompt_desensitized if payload.prompt_desensitized is not None else payload.prompt_original),
-        prompt_original=_serialize_json(payload.prompt_original),
-        prompt_desensitized=_serialize_json(payload.prompt_desensitized if payload.prompt_desensitized is not None else payload.prompt_original),
-        response=_serialize_json(payload.response),
+        prompt=_trim_text(_serialize_json(payload.prompt_desensitized if payload.prompt_desensitized is not None else payload.prompt_original)),
+        prompt_original=_trim_text(_serialize_json(payload.prompt_original)),
+        prompt_desensitized=_trim_text(_serialize_json(payload.prompt_desensitized if payload.prompt_desensitized is not None else payload.prompt_original)),
+        response=_trim_text(_serialize_json(payload.response)),
         is_stream=payload.is_stream,
         is_blocked=payload.is_blocked,
         is_desensitized=payload.is_desensitized,
@@ -215,3 +216,13 @@ def _serialize_json(value: Any) -> str:
     if isinstance(value, str):
         return value
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _trim_text(value: str) -> str:
+    max_bytes = settings.archive_max_payload_bytes
+    if max_bytes <= 0:
+        return value
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")

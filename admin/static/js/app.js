@@ -45,6 +45,7 @@ async function loadPage(page) {
   if (page === "observations") return loadObservations();
   if (page === "rules") return loadRules();
   if (page === "apiKeys") return setupApiKeysPage();
+  if (page === "dataGovernance") return loadDataGovernance();
   if (page === "settings") return loadSettings();
   if (page === "placeholder") return loadPlaceholder();
 }
@@ -706,6 +707,112 @@ function setButtonBusy(button, busy, label) {
   if (!button.dataset.defaultText) button.dataset.defaultText = button.textContent;
   button.disabled = busy;
   button.textContent = busy ? label : button.dataset.defaultText;
+}
+
+async function loadDataGovernance() {
+  bindDataGovernanceControls();
+  await Promise.all([loadDataGovernanceSummary(), loadCoverageStatus()]);
+}
+
+function bindDataGovernanceControls() {
+  const previewButton = document.getElementById("previewDataCleanup");
+  const cleanupButton = document.getElementById("runDataCleanup");
+  const coverageButton = document.getElementById("runCoverageAnalysis");
+  if (previewButton && previewButton.dataset.bound !== "true") {
+    previewButton.dataset.bound = "true";
+    previewButton.addEventListener("click", () => previewDataCleanup());
+  }
+  if (cleanupButton && cleanupButton.dataset.bound !== "true") {
+    cleanupButton.dataset.bound = "true";
+    cleanupButton.addEventListener("click", () => runDataCleanup());
+  }
+  if (coverageButton && coverageButton.dataset.bound !== "true") {
+    coverageButton.dataset.bound = "true";
+    coverageButton.addEventListener("click", () => runCoverageAnalysis());
+  }
+}
+
+async function loadDataGovernanceSummary() {
+  const target = document.getElementById("dataGovernanceSummary");
+  if (!target) return;
+  const summary = await SafetyHub.api("/admin/api/data-governance/summary");
+  target.innerHTML = [
+    `<div class="trend-item"><span>训练数据</span><strong>总量 ${summary.training_total}</strong><strong>有效 ${summary.training_active}</strong><strong>待分析 ${summary.training_pending_analysis}</strong><strong>被覆盖 ${summary.training_covered}</strong><strong>过期 ${summary.training_expired}</strong></div>`,
+    `<div class="trend-item"><span>审计数据</span><strong>总量 ${summary.audit_total}</strong><strong>过期 ${summary.audit_expired}</strong></div>`,
+    `<div class="trend-item"><span>治理任务</span><strong>${summary.running_job ? `运行中 #${summary.running_job.id}` : "无运行任务"}</strong><strong>${summary.running_job ? `已处理 ${summary.running_job.processed_count}` : "可手动启动"}</strong></div>`,
+    `<div class="trend-item"><span>追溯期</span><strong>训练 ${summary.archive_retention_days} 天</strong><strong>审计 ${summary.audit_retention_days} 天</strong></div>`
+  ].join("");
+}
+
+function coveragePayload() {
+  return {
+    max_records: Math.min(100000, Math.max(1, Number(inputValue("coverageMaxRecords") || 5000))),
+    max_seconds: Math.min(3600, Math.max(1, Number(inputValue("coverageMaxSeconds") || 600))),
+    batch_size: Math.min(5000, Math.max(1, Number(inputValue("coverageBatchSize") || 200))),
+    batch_sleep_ms: Math.min(5000, Math.max(0, Number(inputValue("coverageBatchSleepMs") || 200))),
+    lookback: Math.min(5000, Math.max(1, Number(inputValue("coverageLookback") || 200)))
+  };
+}
+
+async function loadCoverageStatus() {
+  const target = document.getElementById("coverageStatus");
+  if (!target) return;
+  const status = await SafetyHub.api("/admin/api/data-governance/coverage/status");
+  if (!status.id) {
+    target.innerHTML = `<div class="trend-item"><span>当前任务</span><strong>暂无任务</strong><strong>可手动启动</strong></div>`;
+    return;
+  }
+  target.innerHTML = `<div class="trend-item"><span>最近任务 #${status.id}</span><strong>${status.status}</strong><strong>已处理 ${status.processed_count}</strong><strong>标记 ${status.marked_count}</strong><strong>游标 ${status.cursor_value || "-"}</strong></div>`;
+}
+
+async function runCoverageAnalysis() {
+  const result = document.getElementById("coverageResult");
+  result.textContent = "正在执行覆盖分析...";
+  const response = await SafetyHub.api("/admin/api/data-governance/coverage/run", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(coveragePayload())
+  });
+  result.textContent = SafetyHub.json(response);
+  await Promise.all([loadDataGovernanceSummary(), loadCoverageStatus()]);
+}
+
+function dataCleanupPayload() {
+  return {
+    include_training_covered: document.getElementById("cleanupTrainingCovered")?.checked === true,
+    include_training_expired: document.getElementById("cleanupTrainingExpired")?.checked !== false,
+    include_audit_expired: document.getElementById("cleanupAuditExpired")?.checked !== false,
+    limit: Math.min(10000, Math.max(1, Number(inputValue("cleanupLimit") || 1000)))
+  };
+}
+
+async function previewDataCleanup() {
+  const result = document.getElementById("dataGovernanceResult");
+  result.textContent = "正在预览...";
+  const payload = await SafetyHub.api("/admin/api/data-governance/cleanup/preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(dataCleanupPayload())
+  });
+  result.textContent = SafetyHub.json(payload);
+  await loadDataGovernanceSummary();
+}
+
+async function runDataCleanup() {
+  const result = document.getElementById("dataGovernanceResult");
+  const payload = dataCleanupPayload();
+  if (!payload.include_training_covered && !payload.include_training_expired && !payload.include_audit_expired) {
+    result.textContent = "请至少选择一种清理范围。";
+    return;
+  }
+  result.textContent = "正在执行清理...";
+  const response = await SafetyHub.api("/admin/api/data-governance/cleanup", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  result.textContent = SafetyHub.json(response);
+  await loadDataGovernanceSummary();
 }
 
 async function loadSettings() {

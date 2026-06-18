@@ -32,6 +32,12 @@ from admin.schemas import (
     AuditDetail,
     AuditListResponse,
     AuditSummary,
+    DataGovernanceCleanupPreviewResponse,
+    DataGovernanceCleanupRequest,
+    DataGovernanceCleanupResponse,
+    DataGovernanceCoverageRequest,
+    DataGovernanceCoverageResponse,
+    DataGovernanceSummaryResponse,
     ImageAssetItem,
     ImageAssetListResponse,
     ObservationItem,
@@ -55,6 +61,7 @@ from storage.admin_ops import AdminOperationPayload, AdminOperationQuery, AdminO
 from storage.archive import ArchiveQuery, ArchiveReader
 from storage.audit import AuditQuery, AuditReader
 from storage.database import get_session_factory
+from storage.data_governance import CoverageAnalysisConfig, DataGovernanceService
 from storage.image_assets import ImageAssetReader
 from storage.models import AdminOperation, ApiKeyRecord, AuditLog, ImageAsset, MessageArchive
 
@@ -207,6 +214,84 @@ async def get_audit(request: Request, audit_id: int):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Audit not found")
     await _write_admin_operation(request, "audit.view_detail", "audit", str(audit_id))
     return _audit_to_detail(audit)
+
+
+@router.get("/data-governance/summary", response_model=DataGovernanceSummaryResponse)
+async def data_governance_summary(request: Request):
+    summary = await _data_governance_service(request).summary()
+    return DataGovernanceSummaryResponse(
+        training_total=summary.training_total,
+        training_active=summary.training_active,
+        training_covered=summary.training_covered,
+        training_pending_analysis=summary.training_pending_analysis,
+        training_expired=summary.training_expired,
+        audit_total=summary.audit_total,
+        audit_expired=summary.audit_expired,
+        running_job=summary.running_job,
+        archive_retention_days=settings.archive_retention_days,
+        audit_retention_days=settings.audit_retention_days,
+    )
+
+
+@router.post("/data-governance/coverage/run", response_model=DataGovernanceCoverageResponse)
+async def run_data_governance_coverage(request: Request, payload: DataGovernanceCoverageRequest):
+    result = await _data_governance_service(request).run_coverage_analysis(
+        requested_by=getattr(request.state, "admin_user", ""),
+        config=CoverageAnalysisConfig(
+            max_seconds=payload.max_seconds,
+            max_records=payload.max_records,
+            batch_size=payload.batch_size,
+            batch_sleep_ms=payload.batch_sleep_ms,
+            lookback=payload.lookback,
+        ),
+    )
+    await _write_admin_operation(request, "data_governance.coverage_run", "data_governance", f"job={result.job_id};status={result.status}")
+    return DataGovernanceCoverageResponse(
+        job_id=result.job_id,
+        status=result.status,
+        processed_count=result.processed_count,
+        marked_count=result.marked_count,
+        cursor_value=result.cursor_value,
+        error=result.error,
+    )
+
+
+@router.get("/data-governance/coverage/status")
+async def data_governance_coverage_status(request: Request):
+    return await _data_governance_service(request).coverage_status() or {}
+
+
+@router.post("/data-governance/cleanup/preview", response_model=DataGovernanceCleanupPreviewResponse)
+async def preview_data_governance_cleanup(request: Request, payload: DataGovernanceCleanupRequest):
+    preview = await _data_governance_service(request).preview_cleanup(
+        include_training_covered=payload.include_training_covered,
+        include_training_expired=payload.include_training_expired,
+        include_audit_expired=payload.include_audit_expired,
+        limit=payload.limit,
+    )
+    await _write_admin_operation(request, "data_governance.preview_cleanup", "data_governance", "preview")
+    return DataGovernanceCleanupPreviewResponse(
+        training_covered=preview.training.covered,
+        training_expired=preview.training.expired,
+        audit_expired=preview.audit_expired,
+    )
+
+
+@router.post("/data-governance/cleanup", response_model=DataGovernanceCleanupResponse)
+async def run_data_governance_cleanup(request: Request, payload: DataGovernanceCleanupRequest):
+    result = await _data_governance_service(request).cleanup(
+        include_training_covered=payload.include_training_covered,
+        include_training_expired=payload.include_training_expired,
+        include_audit_expired=payload.include_audit_expired,
+        limit=payload.limit,
+    )
+    await _write_admin_operation(request, "data_governance.cleanup", "data_governance", f"training_covered={payload.include_training_covered};training_expired={payload.include_training_expired};audit_expired={payload.include_audit_expired};limit={payload.limit}")
+    return DataGovernanceCleanupResponse(
+        status="ok",
+        training_covered_deleted=result.training.covered_deleted,
+        training_expired_deleted=result.training.expired_deleted,
+        audit_deleted=result.audit_deleted,
+    )
 
 
 @router.get("/admin-ops", response_model=AdminOperationListResponse)
@@ -488,6 +573,10 @@ def _image_asset_reader(request: Request) -> ImageAssetReader:
     return getattr(request.app.state, "image_asset_reader", None) or ImageAssetReader(_session_factory(request))
 
 
+def _data_governance_service(request: Request) -> DataGovernanceService:
+    return getattr(request.app.state, "data_governance_service", None) or DataGovernanceService(_session_factory(request))
+
+
 def _admin_operation_writer(request: Request) -> AdminOperationWriter:
     return getattr(request.app.state, "admin_operation_writer", None) or AdminOperationWriter(_session_factory(request))
 
@@ -639,6 +728,8 @@ def _audit_to_detail(audit: AuditLog) -> AuditDetail:
     return AuditDetail(
         **summary,
         matched_snippet=audit.matched_snippet,
+        context_snippet=getattr(audit, "context_snippet", "") or "",
+        desensitized_snippet=getattr(audit, "desensitized_snippet", "") or "",
         full_text_hash=audit.full_text_hash,
         approval_id=audit.approval_id,
         security_policy_id=audit.security_policy_id,

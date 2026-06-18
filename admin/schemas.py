@@ -51,6 +51,56 @@ class ArchiveStatsResponse(BaseModel):
     by_model: dict[str, int]
 
 
+class DataGovernanceSummaryResponse(BaseModel):
+    training_total: int
+    training_active: int
+    training_covered: int
+    training_pending_analysis: int
+    training_expired: int
+    audit_total: int
+    audit_expired: int
+    running_job: dict[str, Any] | None = None
+    archive_retention_days: int
+    audit_retention_days: int
+
+
+class DataGovernanceCoverageRequest(BaseModel):
+    max_seconds: int = Field(default=600, ge=1, le=3600)
+    max_records: int = Field(default=5000, ge=1, le=100000)
+    batch_size: int = Field(default=200, ge=1, le=5000)
+    batch_sleep_ms: int = Field(default=200, ge=0, le=5000)
+    lookback: int = Field(default=200, ge=1, le=5000)
+
+
+class DataGovernanceCoverageResponse(BaseModel):
+    job_id: int
+    status: str
+    processed_count: int
+    marked_count: int
+    cursor_value: str
+    error: str = ""
+
+
+class DataGovernanceCleanupRequest(BaseModel):
+    include_training_covered: bool = False
+    include_training_expired: bool = True
+    include_audit_expired: bool = True
+    limit: int = Field(default=1000, ge=1, le=10000)
+
+
+class DataGovernanceCleanupPreviewResponse(BaseModel):
+    training_covered: int
+    training_expired: int
+    audit_expired: int
+
+
+class DataGovernanceCleanupResponse(BaseModel):
+    status: str
+    training_covered_deleted: int
+    training_expired_deleted: int
+    audit_deleted: int
+
+
 class ImageAssetItem(BaseModel):
     id: int
     request_id: str
@@ -85,6 +135,8 @@ class AuditSummary(BaseModel):
 
 class AuditDetail(AuditSummary):
     matched_snippet: str
+    context_snippet: str
+    desensitized_snippet: str
     full_text_hash: str
     approval_id: str | None
     security_policy_id: str | None

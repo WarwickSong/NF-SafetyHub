@@ -35,6 +35,14 @@ class Settings(BaseSettings):
     db_url: str = "sqlite+aiosqlite:///./data/safetyhub.db"
     archive_retention_days: int = 180
     audit_retention_days: int = 365
+    data_governance_auto_coverage_enabled: bool = False
+    data_governance_coverage_start_time: str = "02:00"
+    data_governance_coverage_max_seconds: int = 600
+    data_governance_coverage_max_records: int = 5000
+    data_governance_coverage_batch_size: int = 200
+    data_governance_coverage_batch_sleep_ms: int = 200
+    data_governance_coverage_lookback: int = 200
+    data_governance_cleanup_batch_size: int = 1000
     system_disk_monitor_path: Path = Path("/")
     system_disk_monitor_container_path: Path = Path("/mnt/system-disk")
     data_disk_monitor_path: Path = Path("data")

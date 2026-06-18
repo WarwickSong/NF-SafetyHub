@@ -20,7 +20,8 @@ from proxy.stream import SSEStreamProxy
 from proxy.upstream_router import UpstreamRouter, get_default_upstream_router
 from storage.archive import ArchivePayload, ArchiveWriter
 from storage.audit import AuditPayload, AuditWriter
-from storage.image_assets import ImageAssetArchiver, extract_image_asset_sources
+from storage.image_assets import ImageAssetArchiver, extract_image_asset_sources, sanitize_image_response_payload
+from storage.training import TrainingConversationWriter
 
 STREAM_ARCHIVE_ENCODING = "utf-8"
 
@@ -58,6 +59,7 @@ async def relay_openai_compatible(request: Request, upstream_path: str):
     is_stream = isinstance(body, dict) and bool(body.get("stream", False))
     scan_result: AggregatedScanResult | None = None
     latest_scan_text = ""
+    latest_desensitized_text = ""
     was_desensitized = False
 
     if path == CHAT_COMPLETIONS_PATH:
@@ -69,18 +71,19 @@ async def relay_openai_compatible(request: Request, upstream_path: str):
             scan_result = await scanner.scan(latest_scan_text)
             if scan_result.blocked and isinstance(body, dict):
                 fake_response = await generate_fake_response(body, scan_result, is_stream)
-                _write_chat_audit(request, scan_result, latest_scan_text, "blocked")
+                _write_chat_audit(request, scan_result, latest_scan_text, "blocked", identity)
                 _write_chat_archive(request, original_body, body, _response_archive_body(fake_response), scan_result, "blocked", is_stream, started_at, identity)
                 return fake_response
         if isinstance(body, dict):
             desensitized_body = desensitize_chat_request_body(body)
             was_desensitized = desensitized_body != body
+            latest_desensitized_text = extract_latest_text_from_request(path, desensitized_body) if was_desensitized else ""
             body = desensitized_body
 
     upstream_router = getattr(request.app.state, "upstream_router", None) or get_default_upstream_router()
     action_taken = _action_from_scan_result(scan_result, was_desensitized) if path == CHAT_COMPLETIONS_PATH else "passed"
     if path == CHAT_COMPLETIONS_PATH:
-        _write_chat_audit(request, scan_result, latest_scan_text, action_taken)
+        _write_chat_audit(request, scan_result, latest_scan_text, action_taken, identity, latest_desensitized_text)
     response = await _relay_to_upstream(
         request,
         path,
@@ -410,7 +413,7 @@ def _write_chat_archive(
     writer = getattr(request.app.state, "archive_writer", None)
     if writer is None:
         return
-    asyncio.create_task(_safe_write_archive(writer, payload))
+    asyncio.create_task(_safe_write_archive(writer, payload, getattr(request.app.state, "training_writer", None)))
 
 
 def _write_image_archive(
@@ -424,6 +427,7 @@ def _write_image_archive(
         return
     request_id = getattr(request.state, "request_id", "")
     response_payload = _parse_response_json(response)
+    archived_response_payload = sanitize_image_response_payload(response_payload)
     metadata = _build_image_metadata(original_body, response_payload)
     asyncio.create_task(_schedule_image_asset_archive(request, request_id, response_payload))
     payload = ArchivePayload(
@@ -434,7 +438,7 @@ def _write_image_archive(
         capability="image",
         prompt_original=original_body.get("prompt", ""),
         prompt_desensitized=original_body.get("prompt", ""),
-        response=_response_archive_body(response),
+        response={"media_type": response.media_type or "", "content": archived_response_payload},
         image_metadata=metadata,
         latency_ms=int((perf_counter() - started_at) * 1000),
     )
@@ -515,6 +519,8 @@ def _write_chat_audit(
     scan_result: AggregatedScanResult | None,
     scanned_text: str,
     action_taken: str,
+    identity: RequestIdentity | None = None,
+    desensitized_text: str = "",
 ) -> None:
     if scan_result is None or not scan_result.hit:
         return
@@ -522,8 +528,9 @@ def _write_chat_audit(
         request_id=getattr(request.state, "request_id", ""),
         scan_result=scan_result,
         action_taken=action_taken,
-        user_id=getattr(getattr(request.state, "identity", None), "user_id", ""),
+        user_id=identity.user_id if identity else getattr(getattr(request.state, "identity", None), "user_id", ""),
         scanned_text=scanned_text,
+        desensitized_text=desensitized_text,
     )
     archive_queue = getattr(request.app.state, "archive_queue", None)
     if archive_queue is not None and archive_queue.enqueue_audit(payload):
@@ -534,9 +541,11 @@ def _write_chat_audit(
     asyncio.create_task(_safe_write_audit(writer, payload))
 
 
-async def _safe_write_archive(writer: ArchiveWriter, payload: ArchivePayload) -> None:
+async def _safe_write_archive(writer: ArchiveWriter, payload: ArchivePayload, training_writer: TrainingConversationWriter | None = None) -> None:
     try:
         await writer.write(payload)
+        if training_writer is not None:
+            await training_writer.write_from_archive_payload(payload)
     except Exception:
         return
 
