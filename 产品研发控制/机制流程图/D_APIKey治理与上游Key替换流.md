@@ -67,7 +67,7 @@ flowchart TD
     %% ==================== 其他治理操作 ====================
     subgraph Ops["③ 其他治理操作"]
         direction LR
-        Reveal["POST /api-keys/{id}/reveal<br/>解密返回明文<br/>(写 admin_operation)"]
+        Reveal["POST /api-keys/{id}/reveal<br/>解密返回明文<br/>(写 admin_operations)"]
         Replace["POST /api-keys/{id}/replace<br/>替换 upstream_key<br/>重新加密入库"]
         Bulk["POST /api-keys/bulk-replace<br/>CSV 批量替换"]
         Revoke["DELETE /api-keys/{id}<br/>本地标记 revoked<br/>+ KeyProvider.revoke_key (中转站同步吊销)"]

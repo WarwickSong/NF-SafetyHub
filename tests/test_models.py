@@ -2,6 +2,7 @@ import pytest
 from sqlalchemy import inspect, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from storage.database import POSTGRES_LEGACY_COLUMNS
 from storage.models import ApiKeyRecord, ApprovalChain, ApprovalRequest, Base, ImageAsset, SecurityPolicy
 
 
@@ -49,6 +50,14 @@ async def test_stage3_reserved_tables_are_created_with_required_columns():
     }.issubset(image_asset_columns)
 
     await engine.dispose()
+
+
+def test_postgres_api_keys_legacy_columns_cover_current_model():
+    model_columns = set(ApiKeyRecord.__table__.columns.keys())
+    preserved_required_columns = model_columns - {"id", "key_hash"}
+
+    assert "api_keys" in POSTGRES_LEGACY_COLUMNS
+    assert preserved_required_columns.issubset(POSTGRES_LEGACY_COLUMNS["api_keys"].keys())
 
 
 @pytest.mark.asyncio
