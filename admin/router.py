@@ -58,12 +58,12 @@ from governance.key_provider import KeyProviderError
 from middleware.auth import clear_admin_session_cookie, require_admin_access, set_admin_session_cookie, validate_admin_login
 from middleware.concurrency_limit import get_v1_concurrency_snapshot
 from storage.admin_ops import AdminOperationPayload, AdminOperationQuery, AdminOperationReader, AdminOperationWriter
-from storage.archive import ArchiveQuery, ArchiveReader
 from storage.audit import AuditQuery, AuditReader
 from storage.database import get_session_factory
 from storage.data_governance import CoverageAnalysisConfig, DataGovernanceService
 from storage.image_assets import ImageAssetReader
-from storage.models import AdminOperation, ApiKeyRecord, AuditLog, ImageAsset, MessageArchive
+from storage.models import AdminOperation, ApiKeyRecord, AuditLog, ImageAsset, TrainingConversation
+from storage.training import TrainingConversationQuery, TrainingConversationReader
 
 router = APIRouter(dependencies=[Depends(require_admin_access)])
 
@@ -85,9 +85,8 @@ async def logout(response: Response):
 
 @router.get("/observations/recent", response_model=ObservationListResponse)
 async def recent_observations(request: Request, limit: int = Query(default=10, ge=1, le=50)):
-    reader = _archive_reader(request)
-    archives = await reader.recent(limit)
-    return ObservationListResponse(items=[_archive_to_observation(archive) for archive in archives])
+    conversations = await _training_conversation_reader(request).recent(limit)
+    return ObservationListResponse(items=[_conversation_to_observation(conversation) for conversation in conversations])
 
 
 @router.get("/archives", response_model=ArchiveListResponse)
@@ -103,8 +102,8 @@ async def list_archives(
     start_time: datetime | None = None,
     end_time: datetime | None = None,
 ):
-    page = await _archive_reader(request).list(
-        ArchiveQuery(
+    page = await _training_conversation_reader(request).list(
+        TrainingConversationQuery(
             limit=limit,
             offset=offset,
             user_id=user_id,
@@ -117,7 +116,7 @@ async def list_archives(
         )
     )
     return ArchiveListResponse(
-        items=[_archive_to_summary(item) for item in page.items],
+        items=[_conversation_to_summary(item) for item in page.items],
         pagination=Pagination(total=page.total, limit=page.limit, offset=page.offset),
     )
 
@@ -133,8 +132,8 @@ async def archive_stats(
     start_time: datetime | None = None,
     end_time: datetime | None = None,
 ):
-    stats = await _archive_reader(request).stats(
-        ArchiveQuery(
+    stats = await _training_conversation_reader(request).stats(
+        TrainingConversationQuery(
             user_id=user_id,
             model=model,
             action_taken=action_taken,
@@ -156,11 +155,11 @@ async def archive_stats(
 
 @router.get("/archives/{archive_id}", response_model=ArchiveDetail)
 async def get_archive(request: Request, archive_id: int):
-    archive = await _archive_reader(request).get(archive_id)
-    if archive is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Archive not found")
-    await _write_admin_operation(request, "archive.view_detail", "archive", str(archive_id))
-    return _archive_to_detail(archive)
+    conversation = await _training_conversation_reader(request).get(archive_id)
+    if conversation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Training conversation not found")
+    await _write_admin_operation(request, "training_conversation.view_detail", "training_conversation", str(archive_id))
+    return _conversation_to_detail(conversation)
 
 
 @router.get("/image-assets", response_model=ImageAssetListResponse)
@@ -319,13 +318,13 @@ async def admin_stats(request: Request):
 
 
 async def _load_admin_stats(request: Request) -> AdminStatsResponse:
-    archive_reader = _archive_reader(request)
+    conversation_reader = _training_conversation_reader(request)
     audit_reader = _audit_reader(request)
     now = datetime.now(UTC)
     today_start = datetime.combine(now.date(), time.min, tzinfo=UTC)
     tomorrow_start = today_start + timedelta(days=1)
-    total_archive_stats = await archive_reader.stats()
-    today_archive_stats = await archive_reader.stats(ArchiveQuery(start_time=today_start, end_time=tomorrow_start))
+    total_archive_stats = await conversation_reader.stats()
+    today_archive_stats = await conversation_reader.stats(TrainingConversationQuery(start_time=today_start, end_time=tomorrow_start))
     total_hits = await audit_reader.count_between(datetime.min.replace(tzinfo=UTC), now + timedelta(days=1))
     total_blocks = await audit_reader.count_between(datetime.min.replace(tzinfo=UTC), now + timedelta(days=1), "block")
     today_hits = await audit_reader.count_between(today_start, tomorrow_start)
@@ -334,7 +333,7 @@ async def _load_admin_stats(request: Request) -> AdminStatsResponse:
     for days_ago in range(6, -1, -1):
         day_start = today_start - timedelta(days=days_ago)
         day_end = day_start + timedelta(days=1)
-        day_archive_stats = await archive_reader.stats(ArchiveQuery(start_time=day_start, end_time=day_end))
+        day_archive_stats = await conversation_reader.stats(TrainingConversationQuery(start_time=day_start, end_time=day_end))
         day_hits = await audit_reader.count_between(day_start, day_end)
         day_blocks = await audit_reader.count_between(day_start, day_end, "block")
         trend.append(TrendPoint(date=day_start.date().isoformat(), requests=day_archive_stats.total, hits=day_hits, blocked=day_blocks))
@@ -556,8 +555,8 @@ async def approvals_placeholder():
     return PlaceholderResponse(message="审批链将在阶段 9 启用，当前为只读占位入口")
 
 
-def _archive_reader(request: Request) -> ArchiveReader:
-    return getattr(request.app.state, "archive_reader", None) or ArchiveReader(_session_factory(request))
+def _training_conversation_reader(request: Request) -> TrainingConversationReader:
+    return getattr(request.app.state, "training_conversation_reader", None) or TrainingConversationReader(_session_factory(request))
 
 
 def _audit_reader(request: Request) -> AuditReader:
@@ -671,41 +670,41 @@ async def _write_admin_operation(request: Request, operation: str, resource_type
         return
 
 
-def _archive_to_summary(archive: MessageArchive) -> ArchiveSummary:
+def _conversation_to_summary(conversation: TrainingConversation) -> ArchiveSummary:
     return ArchiveSummary(
-        id=archive.id,
-        request_id=archive.request_id,
-        user_id=archive.user_id,
-        api_key_id=archive.api_key_id,
-        model=archive.model,
-        capability=archive.capability,
-        action_taken=archive.action_taken,
-        is_stream=archive.is_stream,
-        is_blocked=archive.is_blocked,
-        is_desensitized=archive.is_desensitized,
-        blocked_rule_id=archive.blocked_rule_id,
-        matched_rule_ids=_parse_json(archive.matched_rule_ids, []),
-        created_at=archive.created_at,
-        completed_at=archive.completed_at,
-        latency_ms=archive.latency_ms,
+        id=conversation.id,
+        request_id=conversation.request_id,
+        user_id=conversation.user_id,
+        api_key_id=conversation.api_key_id,
+        model=conversation.model,
+        capability=conversation.capability,
+        action_taken="passed",
+        is_stream=False,
+        is_blocked=False,
+        is_desensitized=conversation.is_desensitized,
+        blocked_rule_id="",
+        matched_rule_ids=[],
+        created_at=conversation.created_at,
+        completed_at=conversation.created_at,
+        latency_ms=0,
     )
 
 
-def _archive_to_detail(archive: MessageArchive) -> ArchiveDetail:
-    summary = _archive_to_summary(archive).model_dump()
+def _conversation_to_detail(conversation: TrainingConversation) -> ArchiveDetail:
+    summary = _conversation_to_summary(conversation).model_dump()
     return ArchiveDetail(
         **summary,
-        messages_original=_parse_json(archive.prompt_original, []),
-        messages_desensitized=_parse_json(archive.prompt_desensitized, []),
-        response=_normalize_archive_response(archive.response),
-        image_metadata=_parse_json(archive.image_metadata, {}),
-        prompt_tokens=archive.prompt_tokens,
-        completion_tokens=archive.completion_tokens,
+        messages_original=_parse_json(conversation.messages, []),
+        messages_desensitized=_parse_json(conversation.messages, []),
+        response={"message_content": conversation.assistant_response},
+        image_metadata={},
+        prompt_tokens=0,
+        completion_tokens=0,
     )
 
 
-def _archive_to_observation(archive: MessageArchive) -> ObservationItem:
-    return ObservationItem(**_archive_to_detail(archive).model_dump())
+def _conversation_to_observation(conversation: TrainingConversation) -> ObservationItem:
+    return ObservationItem(**_conversation_to_detail(conversation).model_dump())
 
 
 def _audit_to_summary(audit: AuditLog) -> AuditSummary:
@@ -838,22 +837,6 @@ def _write_rules_config(data: dict[str, Any], active_settings) -> None:
     rules_path.parent.mkdir(parents=True, exist_ok=True)
     with rules_path.open("w", encoding="utf-8") as file:
         yaml.safe_dump(data, file, allow_unicode=True, sort_keys=False)
-
-
-def _normalize_archive_response(value: str) -> Any:
-    response = _parse_json(value, value)
-    if not isinstance(response, dict):
-        return response
-    content = response.get("content")
-    if not isinstance(content, str):
-        return response
-    parsed_content = _parse_json(content, None)
-    if parsed_content is None:
-        return response
-    normalized = dict(response)
-    normalized["raw_content"] = content
-    normalized["content"] = parsed_content
-    return normalized
 
 
 def _parse_json(value: str, fallback: Any) -> Any:

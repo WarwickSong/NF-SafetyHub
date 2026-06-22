@@ -172,17 +172,19 @@
 
 ---
 
-## 四、阶段 3：归档 + 审计
+## 四、阶段 3：早期归档 + 审计
 
-**目标**：建立数据追溯基础。Chat Completions 请求与响应进入消息归档，文生图请求同步写入元数据并异步归档图片本体，所有命中事件进入审计，同时完成 APIKey、配额、策略、审批链的 schema 预留。
+**历史目标**：建立数据追溯基础。Chat Completions 请求与响应进入消息归档，文生图请求同步写入元数据并异步归档图片本体，所有命中事件进入审计，同时完成 APIKey、配额、策略、审批链的 schema 预留。
+
+> 当前阶段 6A 已调整：为降低长期空间占用，`message_archives` 完整归档写入已弃用；passed Chat 写入 `training_conversations`，desensitize/warn/block 写入 `audit_logs`，文生图图片资产写入 `image_assets`。
 
 ### 4.1 任务清单
 
 | 任务 ID | 任务 | 所属功能 | 优先级 |
 |---------|------|----------|--------|
-| S3-01 | ✅ 编写 `storage/models.py`，创建 MessageArchive、AuditLog、ApiKeyRecord、ApprovalRequest、SecurityPolicy、ApprovalChain，并统一 timezone-aware UTC 时间字段 | 存储 | P0 |
-| S3-02 | ✅ MessageArchive 存储 `prompt_original`、`prompt_desensitized`、`is_desensitized`，并补充 `action_taken`、`matched_rule_ids` | F3/F6.1 | P0 |
-| S3-03 | ✅ 编写 `storage/archive.py`（ArchiveWriter + ArchiveReader） | F3 | P0 |
+| S3-01 | ✅ 编写 `storage/models.py`，当前保留 TrainingConversation、AuditLog、ApiKeyRecord、ApprovalRequest、SecurityPolicy、ApprovalChain 等当前运行模型，并统一 timezone-aware UTC 时间字段 | 存储 | P0 |
+| S3-02 | ✅ 训练样本改由 `TrainingConversation` 存储 messages、assistant_response、trajectory、trajectory_hash 和治理字段；旧 `MessageArchive` 完整归档模型已移除 | F3/F6.1 | P0 |
+| S3-03 | ✅ `storage/archive.py` 已收敛为 `ArchivePayload` 数据载体；旧 ArchiveWriter / ArchiveReader 已移除 | F3 | P0 |
 | S3-04 | ✅ 非流式路径集成归档 | F3 | P0 |
 | S3-05 | ✅ 流式路径收集完整 SSE 响应后归档，包含原始 SSE 内容和提取后的 `message_content` | F3 | P0 |
 | S3-06 | ✅ 增加文生图元数据归档：prompt、model、size、style、n、response URL 或 b64 存在状态、request_id、时间，并记录资产数量、来源和调度状态 | F3 | P1 |
@@ -191,7 +193,7 @@
 | S3-07 | ✅ 编写 `storage/audit.py`（AuditWriter） | F7 | P0 |
 | S3-08 | 🟡 在 scanner/relay 中写入 desensitize/block 命中审计；warn 规则当前默认未启用，pass 无命中不写审计 | F7 | P0 |
 | S3-09 | ✅ 写入失败降级，归档或审计失败不得影响主链路 | F3/F7 | P0 |
-| S3-10 | ✅ 编写 `tests/test_archive.py`、`tests/test_audit.py`、`tests/test_observations.py`、`tests/test_models.py`、Header 可选 upstream key 分支和 relay 流式/文生图归档测试 | 测试 | P0 |
+| S3-10 | ✅ 编写 `tests/test_audit.py`、`tests/test_observations.py`、`tests/test_models.py`、`tests/test_training.py`、Header 可选 upstream key 分支和 relay 流式/文生图归档测试 | 测试 | P0 |
 | S3-11 | ✅ 增加 `/admin/api/observations/recent` 最近对话观测 API，用于上线初期查看真实 role/messages 样本 | F3/F8 | P0 |
 
 ### 4.2 R1~R9 预留任务
@@ -212,22 +214,22 @@
 
 | 产出物 | 验收标准 |
 |--------|---------|
-| 消息归档 | Chat 非流式和流式请求已有 request_id、model、capability、原始 prompt、脱敏 prompt、response、action_taken、matched_rule_ids；流式响应归档原始 SSE 内容并提取 `message_content`；user_id/api_key_id 后续随身份治理补齐 |
-| 最近观测 API | 已提供 `/admin/api/observations/recent`，用于上线初期查看最近少量完整 Chat 样本 |
-| 文生图元数据与图片资产归档 | 文生图请求记录 request_id、user_id、model、prompt、size、style、n、响应引用类型、响应 URL 或 b64 存在状态；图片本体异步保存，记录 local_path、sha256、mime_type、size_bytes、status 和 error |
+| 训练样本（阶段 6A 当前口径） | passed Chat 写入 `training_conversations`，包含 request_id、model、capability、messages、assistant_response、trajectory、trajectory_hash、user_id/api_key_id、脱敏状态和治理字段 |
+| 最近观测 API | 当前 `/admin/api/observations/recent` 读取最近少量训练样本，用于上线初期查看 role/messages/assistant response 结构 |
+| 文生图图片资产归档 | 文生图响应中的 URL / b64_json 图片本体异步保存，记录 request_id、local_path、sha256、mime_type、size_bytes、status 和 error；不再写入 `message_archives` 图片 metadata |
 | 审计日志 | 已对命中事件独立记录规则 ID、级别、命中片段、全文 hash、时间；pass 无命中暂不写入审计 |
 | 预留 schema | APIKey、审批、策略、配额相关字段与表均存在 |
 | 降级策略 | 数据库异常不影响用户请求 |
 
 ### 4.4 验收标准
 
-- [x] Chat 非流式正常请求、脱敏请求、拦截请求均能写入归档
-- [x] 归档/审计失败不影响主链路
-- [x] 最近对话观测 API 能返回 role、原始/脱敏 messages、响应和命中动作
-- [x] Chat 流式请求能归档完整响应
-- [x] 文生图请求能写入元数据归档，并异步保存 b64_json / URL 图片本体与归档状态
-- [x] 命中事件全部写入 audit_logs，包含 block/desensitize；warn 规则启用后沿用同一审计写入链路
-- [x] 原始 prompt 与脱敏后 prompt 两份可区分查询
+- [x] Chat passed 请求能写入 `training_conversations`
+- [x] 训练样本/审计/图片资产失败不影响主链路
+- [x] 最近对话观测 API 能返回 role、messages、assistant response 和脱敏状态
+- [x] Chat 流式请求能提取 assistant response 并形成训练样本
+- [x] 文生图请求能异步保存 b64_json / URL 图片本体与状态到 `image_assets`
+- [x] 命中事件写入 audit_logs，包含 block/desensitize；warn 规则启用后沿用同一审计写入链路
+- [x] `message_archives` 完整归档写入已弃用，运行后不应增长
 - [x] APIKey 管理预留完成，当前透传行为零变化
 - [x] 6 张表创建成功，所有预留字段齐全
 
@@ -243,10 +245,10 @@
 |---------|------|----------|--------|
 | S4-01 | ✅ 编写 `middleware/auth.py`，保护 `/admin/*` | F8 | P0 |
 | S4-02 | ✅ 编写 `admin/schemas.py` | F8 | P0 |
-| S4-03 | ✅ 编写 `admin/router.py`，提供归档、审计、统计 API | F8 | P0 |
+| S4-03 | ✅ 编写 `admin/router.py`，提供训练样本、审计、统计 API | F8 | P0 |
 | S4-04 | ✅ 编写 `storage/admin_ops.py`，记录管理员操作审计 | F14 | P0 |
 | S4-05 | ✅ 编写 `admin/static/index.html` 仪表盘 | F8 | P0 |
-| S4-06 | ✅ 编写 `admin/static/archives.html` 消息归档页 | F8 | P0 |
+| S4-06 | ✅ 编写 `admin/static/archives.html` 训练样本页 | F8 | P0 |
 | S4-07 | ✅ 编写 `admin/static/blocks.html` 拦截/审计页 | F8 | P0 |
 | S4-08 | ✅ 编写 `admin/static/rules.html` 规则管理页，承载阶段 2 已完成的启停和热加载操作 | F8/F4/F5 | P1 |
 | S4-09 | ✅ 编写 `admin/static/api_keys.html` APIKey 页面；阶段 5 已升级为可操作页面 | F15 | P1 |
@@ -259,8 +261,8 @@
 | 产出物 | 验收标准 |
 |--------|---------|
 | 管理后台认证 | 未登录访问 `/admin/*` 返回 401 |
-| 后台 API | 归档查询、审计查询、统计概览全部可用 |
-| 后台前端 | 仪表盘、拦截记录、消息归档、规则、设置可访问 |
+| 后台 API | 训练样本查询、审计查询、统计概览全部可用 |
+| 后台前端 | 仪表盘、拦截记录、训练样本、规则、设置可访问 |
 | 预留页面 | APIKey/模型权限、审批记录页面有入口与只读占位 |
 | 管理员操作审计 | 查看详情、导出、规则变更、审批动作都有操作日志 |
 
@@ -268,7 +270,7 @@
 
 - [x] 管理员可以登录后台
 - [x] 未登录无法访问后台 API 和页面
-- [x] 后台可按时段、用户、规则筛选归档和审计
+- [x] 后台可按时段、用户、关键词筛选训练样本和审计
 - [x] 统计面板展示今日请求数、命中数、拦截数、趋势
 - [x] 管理员操作写入 admin_operation_logs
 
@@ -640,8 +642,8 @@
 - [x] 文生图元数据写入数据库，阶段 3 已异步归档图片本体和状态记录
 - [x] 拦截、脱敏事件有审计记录；告警事件待阶段 8
 - [x] 管理 API 已受认证保护，最近观测 API 可查看数据；最小管理后台页面已完成，APIKey 页面阶段 5 已升级为可操作页面
-- [x] 管理后台包含仪表盘、拦截记录、消息归档、规则、设置、APIKey 管理、审批记录页面
-- [x] Request ID、user_id、api_key_id、model、capability 能贯穿归档和审计
+- [x] 管理后台包含仪表盘、拦截记录、训练样本、规则、设置、APIKey 管理、审批记录页面
+- [x] Request ID、user_id、api_key_id、model、capability 能贯穿训练样本、审计和图片资产
 - [x] APIKey 单条替换与 CSV 批量替换可用
 
 ### 14.2 性能检查
@@ -730,7 +732,7 @@
 | 安全检测引擎（关键词 + 正则 + 调度） | 代码 | 阶段 2 |
 | 请求侧手机号脱敏 | 代码 | 阶段 2 |
 | 伪装回复（OpenAI 兼容格式） | 代码 | 阶段 2 |
-| 消息归档（原始 + 脱敏 prompt） | 代码 | 阶段 3 |
+| 训练样本与轻量审计（messages + assistant response / 命中证据） | 代码 | 阶段 6A 当前口径 |
 | 审计日志 | 代码 | 阶段 3 |
 | APIKey/模型/策略/审批/配额 schema 预留 | 代码 | 阶段 3 |
 | 管理后台（最小 Web 界面） | 代码 | 阶段 4 |

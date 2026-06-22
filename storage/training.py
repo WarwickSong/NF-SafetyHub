@@ -6,7 +6,7 @@ import json
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from config import settings
@@ -22,6 +22,37 @@ class TrainingSummary:
     pending_analysis: int
     active: int
     expired: int
+
+
+@dataclass(slots=True)
+class TrainingConversationQuery:
+    limit: int = 20
+    offset: int = 0
+    user_id: str | None = None
+    model: str | None = None
+    action_taken: str | None = None
+    is_blocked: bool | None = None
+    keyword: str | None = None
+    start_time: Any = None
+    end_time: Any = None
+
+
+@dataclass(slots=True)
+class TrainingConversationPage:
+    items: list[TrainingConversation]
+    total: int
+    limit: int
+    offset: int
+
+
+@dataclass(slots=True)
+class TrainingConversationStats:
+    total: int
+    blocked: int
+    desensitized: int
+    passed: int
+    by_action: dict[str, int]
+    by_model: dict[str, int]
 
 
 @dataclass(slots=True)
@@ -61,6 +92,54 @@ class TrainingConversationReader:
     def __init__(self, session_factory: Callable[[], AsyncSession] | async_sessionmaker[AsyncSession] | None = None):
         self._session_factory = session_factory or get_session_factory()
 
+    async def recent(self, limit: int = 10) -> list[TrainingConversation]:
+        safe_limit = min(max(limit, 1), 50)
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(TrainingConversation)
+                .where(TrainingConversation.covered_by_conversation_id == "")
+                .order_by(TrainingConversation.created_at.desc(), TrainingConversation.id.desc())
+                .limit(safe_limit)
+            )
+            return list(result.scalars().all())
+
+    async def list(self, query: TrainingConversationQuery) -> TrainingConversationPage:
+        safe_limit = min(max(query.limit, 1), 100)
+        safe_offset = max(query.offset, 0)
+        stmt = select(TrainingConversation)
+        count_stmt = select(func.count(TrainingConversation.id))
+        for item in _conversation_filters(query):
+            stmt = stmt.where(item)
+            count_stmt = count_stmt.where(item)
+        stmt = stmt.order_by(TrainingConversation.created_at.desc(), TrainingConversation.id.desc()).limit(safe_limit).offset(safe_offset)
+        async with self._session_factory() as session:
+            total = await session.scalar(count_stmt)
+            result = await session.execute(stmt)
+            return TrainingConversationPage(items=list(result.scalars().all()), total=total or 0, limit=safe_limit, offset=safe_offset)
+
+    async def get(self, conversation_id: int) -> TrainingConversation | None:
+        async with self._session_factory() as session:
+            return await session.get(TrainingConversation, conversation_id)
+
+    async def stats(self, query: TrainingConversationQuery | None = None) -> TrainingConversationStats:
+        active_query = query or TrainingConversationQuery()
+        base_stmt = select(TrainingConversation)
+        for item in _conversation_filters(active_query):
+            base_stmt = base_stmt.where(item)
+        subquery = base_stmt.subquery()
+        async with self._session_factory() as session:
+            total = await session.scalar(select(func.count()).select_from(subquery)) or 0
+            desensitized = await session.scalar(select(func.count()).select_from(subquery).where(subquery.c.is_desensitized.is_(True))) or 0
+            model_rows = await session.execute(select(subquery.c.model, func.count()).group_by(subquery.c.model))
+            return TrainingConversationStats(
+                total=total,
+                blocked=0,
+                desensitized=desensitized,
+                passed=total,
+                by_action={"passed": total} if total else {},
+                by_model={key or "unknown": value for key, value in model_rows.all()},
+            )
+
     async def summary(self) -> TrainingSummary:
         now = utc_now()
         async with self._session_factory() as session:
@@ -91,6 +170,26 @@ class TrainingConversationReader:
                 result.expired_deleted = len(expired_ids)
             await session.commit()
         return result
+
+
+def _conversation_filters(query: TrainingConversationQuery) -> list[Any]:
+    filters = []
+    if query.user_id:
+        filters.append(TrainingConversation.user_id == query.user_id)
+    if query.model:
+        filters.append(TrainingConversation.model == query.model)
+    if query.action_taken and query.action_taken != "passed":
+        filters.append(TrainingConversation.id == -1)
+    if query.is_blocked is True:
+        filters.append(TrainingConversation.id == -1)
+    if query.keyword:
+        pattern = f"%{query.keyword}%"
+        filters.append(or_(TrainingConversation.messages.like(pattern), TrainingConversation.assistant_response.like(pattern), TrainingConversation.trajectory.like(pattern)))
+    if query.start_time:
+        filters.append(TrainingConversation.created_at >= query.start_time)
+    if query.end_time:
+        filters.append(TrainingConversation.created_at <= query.end_time)
+    return filters
 
 
 def _conversation_from_payload(payload: ArchivePayload) -> TrainingConversation | None:

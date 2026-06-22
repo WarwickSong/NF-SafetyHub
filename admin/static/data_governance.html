@@ -10,7 +10,7 @@
   <nav class="sidebar">
     <div class="brand">SafetyHub</div>
     <a href="/admin/index.html">仪表盘</a>
-    <a href="/admin/archives.html">消息归档</a>
+    <a href="/admin/archives.html">训练样本</a>
     <a href="/admin/blocks.html">拦截审计</a>
     <a href="/admin/observations.html">上线观测</a>
     <a href="/admin/rules.html">规则</a>
@@ -26,7 +26,7 @@
       <div class="governance-model-grid">
         <div class="governance-model-item"><span>training_conversations</span><strong>完整训练轨迹</strong><em>messages + assistant response</em><small>只保存通过的 chat，对话发起人通过 user_id / api_key_id 追踪。</small></div>
         <div class="governance-model-item"><span>audit_logs</span><strong>审计证据</strong><em>命中片段 + 前后文 + 脱敏后片段</em><small>不保存完整 message，按审计追溯期销毁。</small></div>
-        <div class="governance-model-item"><span>message_archives</span><strong>兼容归档</strong><em>后台现有详情视图</em><small>保持现有页面和统计兼容，后续可逐步瘦身。</small></div>
+        <div class="governance-model-item"><span>image_assets</span><strong>图片资产索引</strong><em>本地路径 + hash + 状态</em><small>保留图片资产管理能力；message_archives 已弃用，不再运行时写入。</small></div>
       </div>
     </section>
     <section class="card governance-card">

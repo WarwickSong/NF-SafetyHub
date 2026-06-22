@@ -2,7 +2,7 @@
 
 > 更新时间：2026-06-18
 > 当前阶段：阶段 6A — 单实例 Docker 生产稳定性、高并发治理与数据治理交付
-> 当前状态：阶段 1~6A 核心能力已全部落地（详见第二、三、四章）；2026-06 已完成透明中继兼容性修复、训练数据沉淀、数据治理后台、覆盖分析、手动清理和内网 Docker 离线部署数据库保留策略。覆盖分析采用按 `user_id + api_key_id` 分组的确定性 JSON 前缀比较，寻找每组最长有效轨迹集合；不按模型隔离，不使用 lookback，不引入前缀 hash/派生表/外部通信。内网升级部署保留已有 `api_keys` 表，不从 JSON/SQL 重新导入 APIKey，其余当前系统表可按最新模型删除并重建。历史自动化测试基线为 `94 passed`，当前生产代码已继续演进，测试结果需以当前环境复跑为准；最近专项验证包含数据治理覆盖分析测试、离线包 checksum、Compose 配置和当前服务 `/health/ready`。阶段 7 及之后暂不开发，仅保留长期规划；生产上线前重点转为真实上游联调、高并发阶梯压测、PostgreSQL 稳定性、备份恢复、运维安全配置和生产验收。
+> 当前状态：阶段 1~6A 核心能力已全部落地（详见第二、三、四章）；2026-06 已完成透明中继兼容性修复、训练数据沉淀、数据治理后台、覆盖分析、手动清理和内网 Docker 离线部署数据库保留策略。覆盖分析采用按 `user_id + api_key_id` 分组的确定性 JSON 前缀比较，寻找每组最长有效轨迹集合；不按模型隔离，不使用 lookback，不引入前缀 hash/派生表/外部通信。为降低长期空间占用，运行链路已弃用 `message_archives` 完整归档写入，管理员“训练样本/上线观测”改读 `training_conversations`，拦截审计继续读 `audit_logs`，图片资产继续读 `image_assets`。内网升级部署保留已有 `api_keys` 表，不从 JSON/SQL 重新导入 APIKey，其余当前系统表可按最新模型删除并重建。历史自动化测试基线为 `94 passed`，当前生产代码已继续演进，测试结果需以当前环境复跑为准；最近专项验证包含数据治理覆盖分析测试、离线包 checksum、Compose 配置和当前服务 `/health/ready`。阶段 7 及之后暂不开发，仅保留长期规划；生产上线前重点转为真实上游联调、高并发阶梯压测、PostgreSQL 稳定性、备份恢复、运维安全配置和生产验收。
 
 ---
 
@@ -69,11 +69,11 @@
 | 运行状态 API | `admin/router.py`、`admin/schemas.py`、`admin/static/js/app.js`、`admin/static/index.html` | `/admin/api/runtime` 返回 worker pid、配置 worker 数、`/v1` 并发快照、归档队列快照、上游连接池配置和后台缓存配置；仪表盘可展示运行状态 |
 | Docker 生产启动 | `Dockerfile`、`docker-compose.yml`、`.env.example` | Dockerfile 使用多 worker 生产命令，不使用 `--reload`；Compose 包含 PostgreSQL、SafetyHub、Nginx 和健康检查；`.env.example` 包含阶段 6A 配置项 |
 | 透明中继兼容性修复（2026-06） | `proxy/relay.py`、`proxy/stream.py`、`proxy/header_policy.py` | 未脱敏请求改为 `content=raw_body` 字节透传，避免 httpx 重序列化破坏严格 JSON / 上游签名；流式 SSE 同步支持 `raw_body`；新增 `filter_response_headers` 统一剥离 hop-by-hop / `Content-Length` / `Content-Encoding`；非 `KNOWN_JSON_ENDPOINTS` 端点 JSON 解析失败由 400 降级为字节透传；64/64 中继相关测试通过 |
-| 训练数据沉淀 | `storage/training.py`、`storage/models.py`、`proxy/relay.py` | Chat 请求 messages 与 assistant response 形成规范化 `trajectory`，写入 `training_conversations`，用于后续离线训练数据筛选；`analysis_status`、`covered_by_conversation_id`、`expires_at` 支持治理状态追踪 |
+| 训练数据沉淀 | `storage/training.py`、`storage/models.py`、`proxy/relay.py` | Chat 请求 messages 与 assistant response 形成规范化 `trajectory`，写入 `training_conversations`，用于后台训练样本、上线观测和后续离线训练数据筛选；`message_archives` 完整归档写入已弃用，`analysis_status`、`covered_by_conversation_id`、`expires_at` 支持治理状态追踪 |
 | 数据治理后台 | `storage/data_governance.py`、`admin/router.py`、`admin/static/data_governance.html`、`admin/static/js/app.js` | `/admin/api/data-governance/*` 支持治理摘要、覆盖分析启动/状态、清理预览和手动清理；页面提供保存模型摘要、治理摘要、覆盖分析参数和清理入口 |
 | 覆盖分析算法 | `storage/data_governance.py`、`tests/test_data_governance.py` | 按 `user_id + api_key_id` 分组，倒序扫描每组记录，跳过已覆盖项，只做确定性 JSON 前缀比较；目标是保留每组最长有效轨迹集合；不按 `model` 分组，不使用 lookback，不引入 hash 派生表或外部通信 |
 | 内网部署数据库保留策略 | `scripts/rebuild_runtime_tables_preserve_apikeys.py`、`交付运行手册/deploy_intranet_docker.sh` | 内网 Docker 升级时保留已有 `api_keys` 表，删除并重建当前系统需要的其他 SQLAlchemy 模型表；不从 JSON/SQL 重新导入 APIKey，避免覆盖内网已运行数据 |
-| 自动化测试 | `tests/` | 历史全量测试基线为 `94 passed`；当前代码新增测试后最近一次本地复核为 `96 passed, 2 failed`，失败点集中在后台认证测试夹具未初始化 `message_archives` 表。新增数据治理专项测试覆盖跨模型同 user/key 的最长轨迹保留逻辑；生产能力判断以专项测试、Docker/真实上游验收和当前环境复跑结果为准 |
+| 自动化测试 | `tests/` | 历史全量测试基线为 `94 passed`；当前生产代码已继续演进，固定通过数不再作为唯一验收口径。最近专项验证已覆盖训练样本、上线观测、数据治理和中继链路，命令为 `.venv/bin/python -m pytest tests/test_admin_stage4.py tests/test_observations.py tests/test_data_governance.py tests/test_relay.py -q`，结果 `32 passed`；生产能力判断以专项测试、Docker/真实上游验收和当前环境复跑结果为准 |
 
 ---
 
@@ -212,7 +212,6 @@ NF-SafetyHub/
 │   ├── test_admin_image_assets.py
 │   ├── test_admin_stage4.py
 │   ├── test_api_keys.py
-│   ├── test_archive.py
 │   ├── test_audit.py
 │   ├── test_concurrency_limit.py
 │   ├── test_fake_response.py
@@ -238,7 +237,7 @@ NF-SafetyHub/
 
 | 验证项 | 命令 | 当前结果 |
 |--------|------|----------|
-| 全量单元测试 | `python -m pytest` 或已创建虚拟环境时使用 `.\.venv\Scripts\python.exe -m pytest` | 历史基线 `94 passed`；当前生产代码已继续演进，最近一次本地复核为 `96 passed, 2 failed`，失败集中在 `tests/test_admin_auth.py` 的后台认证测试夹具未初始化 `message_archives` 表。该问题属于测试夹具与当前生产代码演进不同步，不影响生产应用生命周期内的数据库初始化；生产上线判断应结合专项测试、Docker/真实上游联调和压测验收 |
+| 全量单元测试 | `python -m pytest` 或已创建虚拟环境时使用 `.venv/bin/python -m pytest` | 历史基线 `94 passed`；当前生产代码已继续演进，固定通过数不再作为唯一验收口径。最近专项验证为训练样本、上线观测、数据治理和中继链路 `32 passed`；生产上线判断应结合专项测试、Docker/真实上游联调和压测验收 |
 | 并发闸门专项测试 | `pytest tests/test_concurrency_limit.py` | 覆盖响应头、非 `/v1/*` 不受限、队列满、排队超时、排队释放后放行 |
 | APIKey / KeyProvider 专项测试 | `pytest tests/test_api_keys.py` | 覆盖手动创建、Provider 创建、reveal、上游 Key 替换、加密不回显、删除已吊销 Key 和请求体大小限制 |
 | 图片资产专项测试 | `pytest tests/test_image_assets.py tests/test_relay_image_assets.py tests/test_admin_image_assets.py` | 覆盖文生图响应引用提取、本体归档、后台状态 API 和操作审计 |

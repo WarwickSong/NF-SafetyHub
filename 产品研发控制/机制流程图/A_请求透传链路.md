@@ -51,7 +51,7 @@ flowchart TD
     Upstream -->|"JSON / SSE 流"| Pool
 
     Pool --> BuildResp["_build_response<br/>filter_response_headers<br/>剥离 Hop-by-hop / Set-Cookie 等"]
-    BuildResp --> ArchiveHook["归档钩子<br/>_write_chat_archive / _write_image_archive<br/>→ ArchiveQueue 异步入队 (不阻塞)"]
+    BuildResp --> ArchiveHook["数据写入钩子<br/>_write_chat_archive / _write_image_archive<br/>→ 训练样本/审计/图片资产异步写入"]
     ArchiveHook --> Resp["响应回 Nginx"]
     Fake --> Resp
 

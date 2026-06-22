@@ -31,7 +31,6 @@ from storage.models import Base
 
 DEFAULT_TABLES = [
     "api_keys",
-    "message_archives",
     "audit_logs",
     "admin_operations",
     "image_assets",

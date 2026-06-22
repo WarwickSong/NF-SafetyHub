@@ -17,7 +17,6 @@ async def test_stage3_reserved_tables_are_created_with_required_columns():
         image_asset_columns = await conn.run_sync(lambda sync_conn: {column["name"] for column in inspect(sync_conn).get_columns("image_assets")})
 
     assert {
-        "message_archives",
         "audit_logs",
         "api_keys",
         "approval_requests",

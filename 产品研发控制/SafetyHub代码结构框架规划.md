@@ -89,7 +89,6 @@ NF-SafetyHub/
 │   ├── test_admin_image_assets.py
 │   ├── test_admin_stage4.py
 │   ├── test_api_keys.py
-│   ├── test_archive.py
 │   ├── test_audit.py
 │   ├── test_concurrency_limit.py
 │   ├── test_data_governance.py
@@ -320,7 +319,7 @@ from engine.scanner import ScannerOrchestrator
 from proxy.fake_response import generate_fake_response
 from proxy.stream import SSEStreamProxy
 from proxy.header_policy import build_upstream_headers, filter_response_headers
-from storage.archive import ArchiveWriter
+from storage.training import TrainingConversationWriter
 from storage.audit import AuditWriter
 router = APIRouter()
 
@@ -823,38 +822,24 @@ class Base(DeclarativeBase):
     pass
 
 
-class MessageArchive(Base):
-    __tablename__ = "message_archives"
+class TrainingConversation(Base):
+    __tablename__ = "training_conversations"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    request_id = Column(String(64), unique=True, nullable=False, index=True)
+    conversation_id = Column(String(64), unique=True, nullable=False, index=True)
+    request_id = Column(String(64), nullable=False, index=True)
     user_id = Column(String(128), nullable=False, index=True)
-    api_key_id = Column(String(64), nullable=True, index=True)
-    model = Column(String(64), nullable=False, index=True)
-    capability = Column(String(32), default="chat", index=True)
-    # ---- 阶段 3 双份 prompt 存储（F6.1-C5）：原始 + 脱敏后 ----
-    prompt_original = Column(Text, nullable=False)
-    prompt_desensitized = Column(Text, nullable=True)
-    is_desensitized = Column(Boolean, default=False, index=True)
-    response = Column(Text, nullable=True)
-    is_stream = Column(Boolean, default=False)
-    is_blocked = Column(Boolean, default=False)
-    blocked_rule_id = Column(String(64), nullable=True)
-    approval_id = Column(String(64), nullable=True, index=True)
-    file_ids = Column(Text, nullable=True)
-    image_metadata = Column(Text, nullable=True)
-    prompt_tokens = Column(Integer, default=0)
-    completion_tokens = Column(Integer, default=0)
+    api_key_id = Column(String(128), nullable=True, index=True)
+    model = Column(String(128), nullable=False, index=True)
+    capability = Column(String(64), default="chat")
+    messages = Column(Text, nullable=False)
+    assistant_response = Column(Text, nullable=False)
+    trajectory = Column(Text, nullable=False)
+    trajectory_hash = Column(String(64), nullable=False, index=True)
+    covered_by_conversation_id = Column(String(64), default="", index=True)
+    analysis_status = Column(String(32), default="pending", index=True)
+    is_desensitized = Column(Boolean, default=False)
     created_at = Column(DateTime, server_default=func.now(), index=True)
-    completed_at = Column(DateTime, nullable=True)
-    latency_ms = Column(Integer, nullable=True)
-    # ---- v1.2 Key 级安全策略关联（v1.0 仅建字段，不写入） ----
-    security_policy_id = Column(String(64), nullable=True, index=True)
-
-    __table_args__ = (
-        Index("ix_archives_user_time", "user_id", "created_at"),
-        Index("ix_archives_api_key_model_time", "api_key_id", "model", "created_at"),
-    )
 
 
 class AuditLog(Base):
@@ -1033,54 +1018,33 @@ class AdminOperationLog(Base):
     created_at = Column(DateTime, server_default=func.now(), index=True)
 ```
 
-#### 2.7.3 `storage/archive.py` — 消息归档
+#### 2.7.3 `storage/training.py` — 训练样本
 
 ```python
-from storage.database import async_session
-from storage.models import MessageArchive
-from sqlalchemy import select, func, desc
+from storage.archive import ArchivePayload
+from storage.models import TrainingConversation
 
 
-class ArchiveWriter:
-    @staticmethod
-    async def write(archive: MessageArchive) -> None:
-        async with async_session() as session:
-            session.add(archive)
-            await session.commit()
-
-    @staticmethod
-    async def update_response(request_id: str, response: str, completed_at, latency_ms: int) -> None:
-        async with async_session() as session:
-            stmt = select(MessageArchive).where(MessageArchive.request_id == request_id)
-            result = await session.execute(stmt)
-            record = result.scalar_one_or_none()
-            if record:
-                record.response = response
-                record.completed_at = completed_at
-                record.latency_ms = latency_ms
-                await session.commit()
-
-
-class ArchiveReader:
-    @staticmethod
-    async def list_records(
-        user_id: str | None = None,
-        start_time=None,
-        end_time=None,
-        keyword: str | None = None,
-        page: int = 1,
-        page_size: int = 20,
-    ) -> tuple[list[MessageArchive], int]:
+class TrainingConversationWriter:
+    async def write_many_from_archive_payloads(self, payloads: list[ArchivePayload]) -> list[TrainingConversation]:
         ...
 
-    @staticmethod
-    async def get_by_id(record_id: int) -> MessageArchive | None:
+
+class TrainingConversationReader:
+    async def recent(self, limit: int = 10) -> list[TrainingConversation]:
         ...
 
-    @staticmethod
-    async def get_stats() -> dict:
+    async def list(self, query: TrainingConversationQuery) -> TrainingConversationPage:
+        ...
+
+    async def get(self, conversation_id: int) -> TrainingConversation | None:
+        ...
+
+    async def stats(self, query: TrainingConversationQuery | None = None) -> TrainingConversationStats:
         ...
 ```
+
+当前运行链路已移除 `message_archives` 完整归档表模型和 `storage/archive.py` 旧读写层；`storage/archive.py` 仅保留 `ArchivePayload` 作为 relay → training/audit 队列的数据载体，管理员页面和长期存储主路径统一使用 `training_conversations`、`audit_logs` 与 `image_assets`。
 
 #### 2.7.4 `storage/audit.py` — 审计日志
 
@@ -1123,7 +1087,7 @@ class AuditReader:
 
 ### 2.8 `admin/` — 管理后台
 
-管理员前端属于本项目交付物，放在 `admin/static/` 目录中，由 FastAPI 挂载静态文件；后端提供 `/admin/api/*` 管理接口。当前前端包含仪表盘、拦截记录、消息归档、上线观测、规则管理、系统设置、APIKey 管理和审批占位。APIKey 页面已在阶段 5/6 升级为可操作页面；模型/token/资源权限由中转站管理，SafetyHub 后台仅展示边界提示或 Provider 引用。
+管理员前端属于本项目交付物，放在 `admin/static/` 目录中，由 FastAPI 挂载静态文件；后端提供 `/admin/api/*` 管理接口。当前前端包含仪表盘、拦截记录、训练样本、上线观测、规则管理、系统设置、APIKey 管理、数据治理和审批占位。APIKey 页面已在阶段 5/6 升级为可操作页面；模型/token/资源权限由中转站管理，SafetyHub 后台仅展示边界提示或 Provider 引用。
 
 #### 2.8.1 `admin/router.py` — API 路由
 
@@ -1131,7 +1095,7 @@ class AuditReader:
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 from admin.schemas import *
 from governance.api_keys import ApiKeyCreate, ApiKeyService
-from storage.archive import ArchiveReader
+from storage.training import TrainingConversationReader
 from storage.audit import AuditReader
 from storage.admin_ops import AdminOperationReader, AdminOperationWriter
 
@@ -1517,7 +1481,7 @@ def create_key_provider(provider_type: str, **kwargs) -> KeyProvider:
 | 改动 ID | 文件 | 改动内容 | 关联功能 | 兼容性保证 |
 |--------|------|---------|---------|-----------|
 | **R6** | `storage/models.py` | 明确 `ApiKeyRecord` 不新增 F20 模型配额、能力配额、速率限制和用量快照字段 | F20 | 资源权限与配额由中转站作为权威系统管理，SafetyHub schema 不污染 |
-| **R7** | `storage/models.py` | `ApiKeyRecord` 新增 2 个 F18/F19 字段：`security_policy_id`、`approval_chain_id`；`MessageArchive`、`AuditLog` 新增 `security_policy_id` 字段；`ApprovalRequest` 新增 `chain_id`、`current_level`、`escalated_at` 字段；`ApiKeyRecord` 新增 `cost_center` 字段 | F18 / F19 | 全部 NULL 默认，老数据无需回填 |
+| **R7** | `storage/models.py` | `ApiKeyRecord` 新增 2 个 F18/F19 字段：`security_policy_id`、`approval_chain_id`；`AuditLog` 新增 `security_policy_id` 字段；`ApprovalRequest` 新增 `chain_id`、`current_level`、`escalated_at` 字段；`ApiKeyRecord` 新增 `cost_center` 字段；旧 `MessageArchive` 模型已移除 | F18 / F19 | 全部 NULL 默认，老数据无需回填 |
 | **R8** | `storage/models.py` | 新增 `SecurityPolicy` 与 `ApprovalChain` 两张 ORM 表，随 `create_all` 自动建表 | F18 / F19 | 表存在但无人写入，零影响 |
 
 **改动量评估**：1 个文件 `storage/models.py`，总计约 60 行新增代码；新增 1 个单元测试，约 40 行。

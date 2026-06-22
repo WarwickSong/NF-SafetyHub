@@ -137,7 +137,12 @@ async function loadArchives() {
   appendParam(params, "keyword", inputValue("filterKeyword"));
   const payload = await SafetyHub.api(`/admin/api/archives?${params}`);
   const table = document.getElementById("archivesTable");
-  table.innerHTML = payload.items.map((item) => `<tr data-id="${item.id}"><td>${item.id}</td><td>${item.request_id}</td><td>${SafetyHub.text(item.model)}</td><td><span class="tag">${item.action_taken}</span></td><td>${item.matched_rule_ids.join(", ") || "-"}</td><td>${SafetyHub.time(item.created_at)}</td></tr>`).join("");
+  if (!payload.items.length) {
+    table.innerHTML = `<tr><td colspan="6">暂无训练样本。新通过的 Chat 请求会写入训练数据池；拦截证据请查看“拦截审计”。</td></tr>`;
+    document.getElementById("archiveDetail").textContent = "";
+    return;
+  }
+  table.innerHTML = payload.items.map((item) => `<tr data-id="${item.id}"><td>${item.id}</td><td>${item.request_id}</td><td>${SafetyHub.text(item.model)}</td><td><span class="tag">${item.action_taken}</span></td><td>${item.is_desensitized ? "已脱敏" : "原样"}</td><td>${SafetyHub.time(item.created_at)}</td></tr>`).join("");
   table.querySelectorAll("tr").forEach((row) => row.addEventListener("click", async () => {
     const detail = await SafetyHub.api(`/admin/api/archives/${row.dataset.id}`);
     document.getElementById("archiveDetail").textContent = SafetyHub.json(detail);
@@ -162,7 +167,11 @@ async function loadAudits() {
 async function loadObservations() {
   const payload = await SafetyHub.api("/admin/api/observations/recent?limit=5");
   const list = document.getElementById("observationsList");
-  list.innerHTML = payload.items.map((item) => `<article class="stack-item" data-id="${item.id}"><h3>${item.request_id}</h3><p>${item.model || "-"} · ${item.action_taken} · ${SafetyHub.time(item.created_at)}</p><button class="button small secondary" data-load-observation="${item.id}">加载完整内容</button><pre class="observation-detail">${SafetyHub.json({ id: item.id, request_id: item.request_id, action_taken: item.action_taken, matched_rule_ids: item.matched_rule_ids, latency_ms: item.latency_ms })}</pre></article>`).join("");
+  if (!payload.items.length) {
+    list.innerHTML = `<article class="stack-item"><h3>暂无上线观测样本</h3><p>新通过的 Chat 请求进入训练数据池后，会在这里展示最近样本。</p></article>`;
+    return;
+  }
+  list.innerHTML = payload.items.map((item) => `<article class="stack-item" data-id="${item.id}"><h3>${item.request_id}</h3><p>${item.model || "-"} · ${item.action_taken} · ${SafetyHub.time(item.created_at)}</p><button class="button small secondary" data-load-observation="${item.id}">加载样本内容</button><pre class="observation-detail">${SafetyHub.json({ id: item.id, request_id: item.request_id, action_taken: item.action_taken, is_desensitized: item.is_desensitized })}</pre></article>`).join("");
   list.querySelectorAll("button[data-load-observation]").forEach((button) => button.addEventListener("click", async () => {
     const detail = await SafetyHub.api(`/admin/api/archives/${button.dataset.loadObservation}`);
     const article = button.closest("article");

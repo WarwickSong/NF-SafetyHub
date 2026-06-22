@@ -32,8 +32,7 @@ flowchart TD
     B4 --> BAudit
     B5 --> BAudit
     BAudit["_write_chat_audit<br/>action='blocked' + rule_id 入审计"]
-    BAudit --> BArchive["_write_chat_archive<br/>原始 prompt + 伪装 response 入归档"]
-    BArchive --> ReturnFake(["返回伪装响应<br/>不触达上游"])
+    BAudit --> ReturnFake(["返回伪装响应<br/>不触达上游<br/>不写训练样本"])
 
     %% ============ 分支 2: DESENSITIZE ============
     Level -- "未 block 但命中脱敏规则" --> D1["desensitize_chat_request_body<br/>按 role/字段定向改写 messages<br/>例: 手机号 → 138****1234"]
@@ -53,13 +52,13 @@ flowchart TD
     Passthrough --> Forward
 
     Forward --> Upstream["上游中转站<br/>(真实大模型回复)"]
-    Upstream --> RespArchive["响应回流<br/>_write_chat_archive 异步入队<br/>(流式: StreamArchiveCollector 拼接)"]
+    Upstream --> RespArchive["响应回流<br/>passed Chat 写 training_conversations<br/>desensitize/warn 证据写 audit_logs"]
     RespArchive --> ReturnReal(["返回真实响应给客户端"])
 
     classDef block fill:#fde2e2,stroke:#c0392b,color:#000
     classDef desens fill:#fff3cd,stroke:#b7791f,color:#000
     classDef pass fill:#dff0d8,stroke:#27ae60,color:#000
-    class B1,B2,B3,B4,B5,BAudit,BArchive,ReturnFake block
+    class B1,B2,B3,B4,B5,BAudit,ReturnFake block
     class D1,D2,D3,DAudit desens
     class P1,P2,NoAudit,PWarnAudit,Passthrough,ReturnReal pass
 ```

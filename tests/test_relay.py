@@ -279,12 +279,12 @@ def test_chat_completions_relays_agent_tool_request_shape(relay_test_client, mon
 
 def test_chat_completions_archives_and_audits_desensitized_request(relay_test_app, monkeypatch):
     captured = {}
-    archive_payloads = []
+    training_payloads = []
     audit_payloads = []
 
-    class FakeArchiveWriter:
-        async def write(self, payload):
-            archive_payloads.append(payload)
+    class FakeTrainingWriter:
+        async def write_from_archive_payload(self, payload):
+            training_payloads.append(payload)
 
     class FakeAuditWriter:
         async def write_scan_result(self, payload):
@@ -310,7 +310,7 @@ def test_chat_completions_archives_and_audits_desensitized_request(relay_test_ap
         return original_async_client(*args, **kwargs)
 
     monkeypatch.setattr(httpx, "AsyncClient", build_client)
-    relay_test_app.state.archive_writer = FakeArchiveWriter()
+    relay_test_app.state.training_writer = FakeTrainingWriter()
     relay_test_app.state.audit_writer = FakeAuditWriter()
 
     with TestClient(relay_test_app) as client:
@@ -321,10 +321,10 @@ def test_chat_completions_archives_and_audits_desensitized_request(relay_test_ap
 
     assert response.status_code == 200
     assert "13812345678" not in captured["body"]
-    assert len(archive_payloads) == 1
-    assert archive_payloads[0].action_taken == "desensitized"
-    assert archive_payloads[0].prompt_original[0]["content"] == "我的手机号是 13812345678"
-    assert archive_payloads[0].prompt_desensitized[0]["content"] == "我的手机号是 138****5678"
+    assert len(training_payloads) == 1
+    assert training_payloads[0].action_taken == "desensitized"
+    assert training_payloads[0].prompt_original[0]["content"] == "我的手机号是 13812345678"
+    assert training_payloads[0].prompt_desensitized[0]["content"] == "我的手机号是 138****5678"
     assert len(audit_payloads) == 1
     assert audit_payloads[0].action_taken == "desensitized"
 
@@ -660,12 +660,12 @@ def test_chat_completions_stream_requests_identity_encoding(relay_test_client, m
     assert captured["cache_control"] == "no-cache"
 
 
-def test_chat_completions_stream_archives_complete_sse_response(relay_test_app, monkeypatch):
-    archive_payloads = []
+def test_chat_completions_stream_writes_training_payload(relay_test_app, monkeypatch):
+    training_payloads = []
 
-    class FakeArchiveWriter:
-        async def write(self, payload):
-            archive_payloads.append(payload)
+    class FakeTrainingWriter:
+        async def write_from_archive_payload(self, payload):
+            training_payloads.append(payload)
 
     async def handler(_request: httpx.Request) -> httpx.Response:
         stream_body = (
@@ -684,7 +684,7 @@ def test_chat_completions_stream_archives_complete_sse_response(relay_test_app, 
         return original_async_client(*args, **kwargs)
 
     monkeypatch.setattr(httpx, "AsyncClient", build_client)
-    relay_test_app.state.archive_writer = FakeArchiveWriter()
+    relay_test_app.state.training_writer = FakeTrainingWriter()
 
     with TestClient(relay_test_app) as client:
         response = client.post(
@@ -694,12 +694,12 @@ def test_chat_completions_stream_archives_complete_sse_response(relay_test_app, 
 
     assert response.status_code == 200
     assert response.text.endswith("data: [DONE]\\n\\n")
-    assert len(archive_payloads) == 1
-    assert archive_payloads[0].is_stream is True
-    assert archive_payloads[0].response["stream"] is True
-    assert archive_payloads[0].response["message_content"] == "你好"
-    assert archive_payloads[0].response["truncated"] is False
-    assert '"content":"你"' in archive_payloads[0].response["content"]
+    assert len(training_payloads) == 1
+    assert training_payloads[0].is_stream is True
+    assert training_payloads[0].response["stream"] is True
+    assert training_payloads[0].response["message_content"] == "你好"
+    assert training_payloads[0].response["truncated"] is False
+    assert '"content":"你"' in training_payloads[0].response["content"]
 
 
 def test_stream_archive_body_truncates_large_sse_response(monkeypatch):
@@ -714,13 +714,13 @@ def test_stream_archive_body_truncates_large_sse_response(monkeypatch):
     assert len(payload["content"].encode("utf-8")) == 20
 
 
-def test_images_generation_archives_metadata_and_schedules_image_body_archive(relay_test_app, monkeypatch):
-    archive_payloads = []
+def test_images_generation_schedules_image_asset_archive(relay_test_app, monkeypatch):
+    archived_assets = []
     b64_image = base64.b64encode(b"\x89PNG\r\n\x1a\nimage-bytes").decode("ascii")
 
-    class FakeArchiveWriter:
-        async def write(self, payload):
-            archive_payloads.append(payload)
+    class FakeImageAssetArchiver:
+        async def archive_response(self, request_id, response_payload):
+            archived_assets.append((request_id, response_payload))
 
     async def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -742,7 +742,8 @@ def test_images_generation_archives_metadata_and_schedules_image_body_archive(re
         return original_async_client(*args, **kwargs)
 
     monkeypatch.setattr(httpx, "AsyncClient", build_client)
-    relay_test_app.state.archive_writer = FakeArchiveWriter()
+    relay_test_app.state.image_asset_archiver = FakeImageAssetArchiver()
+    relay_test_app.state.image_asset_archive_inline = True
 
     with TestClient(relay_test_app) as client:
         response = client.post(
@@ -751,20 +752,8 @@ def test_images_generation_archives_metadata_and_schedules_image_body_archive(re
         )
 
     assert response.status_code == 200
-    assert len(archive_payloads) == 1
-    metadata = archive_payloads[0].image_metadata
-    assert archive_payloads[0].capability == "image"
-    assert archive_payloads[0].prompt_original == "一只猫"
-    assert metadata["prompt"] == "一只猫"
-    assert metadata["model"] == "gpt-image"
-    assert metadata["size"] == "1024x1024"
-    assert metadata["style"] == "natural"
-    assert metadata["n"] == 2
-    assert metadata["response_url_count"] == 1
-    assert metadata["response_urls"] == ["https://cdn.example.com/image-1.png"]
-    assert metadata["response_b64_count"] == 1
-    assert metadata["response_b64_present"] is True
-    assert metadata["asset_count"] == 2
-    assert metadata["asset_sources"] == ["url", "b64_json"]
-    assert metadata["asset_archive_status"] == "scheduled"
-    assert b64_image not in metadata.values()
+    assert len(archived_assets) == 1
+    assert archived_assets[0][0]
+    archived_response = archived_assets[0][1]
+    assert archived_response["data"][0]["url"] == "https://cdn.example.com/image-1.png"
+    assert archived_response["data"][1]["b64_json"] == b64_image

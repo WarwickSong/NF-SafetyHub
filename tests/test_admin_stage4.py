@@ -8,9 +8,10 @@ from admin.router import router
 from config import Settings
 from engine.models import AggregatedScanResult, ScannerResult
 from storage.admin_ops import AdminOperationReader, AdminOperationWriter
-from storage.archive import ArchivePayload, ArchiveReader, ArchiveWriter
+from storage.archive import ArchivePayload
 from storage.audit import AuditPayload, AuditReader, AuditWriter
 from storage.models import Base
+from storage.training import TrainingConversationReader, TrainingConversationWriter
 
 
 class FakeScanner:
@@ -27,25 +28,25 @@ async def test_admin_archives_audits_stats_and_operations_api():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    archive_writer = ArchiveWriter(session_factory)
+    training_writer = TrainingConversationWriter(session_factory)
     audit_writer = AuditWriter(session_factory)
 
-    archive = await archive_writer.write(
-        ArchivePayload(
-            request_id="req_stage4_1",
-            user_id="user_a",
-            model="gpt-test",
-            prompt_original=[{"role": "user", "content": "告诉你一个公司机密"}],
-            prompt_desensitized=[{"role": "user", "content": "告诉你一个公司机密"}],
-            response={
-                "media_type": "application/json",
-                "content": '{"id":"chatcmpl-safetyhub-test","object":"chat.completion","choices":[{"message":{"role":"assistant","content":"抱歉，我无法处理您的请求。"}}]}',
-            },
-            is_blocked=True,
-            action_taken="blocked",
-            blocked_rule_id="KW-CONFIDENTIAL-1",
-            matched_rule_ids=["KW-CONFIDENTIAL-1"],
-        )
+    conversations = await training_writer.write_many_from_archive_payloads(
+        [
+            ArchivePayload(
+                request_id="req_stage4_1",
+                user_id="user_a",
+                model="gpt-test",
+                prompt_original=[{"role": "user", "content": "请总结公司机密培训材料"}],
+                prompt_desensitized=[{"role": "user", "content": "请总结公司机密培训材料"}],
+                response={
+                    "media_type": "application/json",
+                    "content": '{"id":"chatcmpl-safetyhub-test","object":"chat.completion","choices":[{"message":{"role":"assistant","content":"这是训练样本回复。"}}]}',
+                },
+                is_blocked=False,
+                action_taken="passed",
+            )
+        ]
     )
     scan_result = AggregatedScanResult(
         results=[
@@ -74,7 +75,7 @@ async def test_admin_archives_audits_stats_and_operations_api():
     app.include_router(router, prefix="/admin/api")
     app.state.settings = Settings(admin_password="strong-local-password")
     app.state.session_factory = session_factory
-    app.state.archive_reader = ArchiveReader(session_factory)
+    app.state.training_conversation_reader = TrainingConversationReader(session_factory)
     app.state.audit_reader = AuditReader(session_factory)
     app.state.admin_operation_writer = AdminOperationWriter(session_factory)
     app.state.admin_operation_reader = AdminOperationReader(session_factory)
@@ -82,7 +83,7 @@ async def test_admin_archives_audits_stats_and_operations_api():
     with TestClient(app) as client:
         auth = ("admin", "strong-local-password")
         archives_response = client.get("/admin/api/archives?user_id=user_a&keyword=公司机密", auth=auth)
-        archive_detail_response = client.get(f"/admin/api/archives/{archive.id}", auth=auth)
+        archive_detail_response = client.get(f"/admin/api/archives/{conversations[0].id}", auth=auth)
         archive_stats_response = client.get("/admin/api/archives/stats", auth=auth)
         audits_response = client.get("/admin/api/audits?rule_level=block", auth=auth)
         audit_detail_response = client.get(f"/admin/api/audits/{logs[0].id}", auth=auth)
@@ -98,10 +99,8 @@ async def test_admin_archives_audits_stats_and_operations_api():
     assert archive_detail_response.status_code == 200
     archive_detail = archive_detail_response.json()
     assert archive_detail["messages_original"][0]["role"] == "user"
-    assert archive_detail["response"]["content"]["id"] == "chatcmpl-safetyhub-test"
-    assert archive_detail["response"]["content"]["choices"][0]["message"]["content"] == "抱歉，我无法处理您的请求。"
-    assert archive_detail["response"]["raw_content"].startswith('{"id":"chatcmpl-safetyhub-test"')
-    assert archive_stats_response.json()["blocked"] == 1
+    assert archive_detail["response"]["message_content"] == "这是训练样本回复。"
+    assert archive_stats_response.json()["blocked"] == 0
     assert audits_response.status_code == 200
     assert audits_response.json()["items"][0]["rule_id"] == "KW-CONFIDENTIAL-1"
     assert audit_detail_response.status_code == 200
@@ -114,7 +113,7 @@ async def test_admin_archives_audits_stats_and_operations_api():
     assert {item["key"] for item in runtime_response.json()["disk_space"]} == {"system", "data"}
     assert all("free_bytes" in item for item in runtime_response.json()["disk_space"])
     assert operations_response.status_code == 200
-    assert {item["operation"] for item in operations_response.json()["items"]} == {"archive.view_detail", "audit.view_detail"}
+    assert {item["operation"] for item in operations_response.json()["items"]} == {"training_conversation.view_detail", "audit.view_detail"}
     assert rules_response.status_code == 200
     assert rules_response.json()["items"]
     assert api_keys_response.status_code == 200

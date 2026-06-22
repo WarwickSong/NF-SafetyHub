@@ -30,7 +30,7 @@ flowchart TD
 
         EnqArchive -- "put_nowait 成功" --> OKFast["主链路立即返回"]
         EnqArchive -- "QueueFull" --> Drop["dropped += 1<br/>(可观测在 runtime 接口)"]
-        Drop --> FallbackTask["asyncio.create_task<br/>fallback 直接调用 ArchiveWriter<br/>(尽力而为)"]
+        Drop --> FallbackTask["asyncio.create_task<br/>fallback 直接调用 TrainingConversationWriter / AuditWriter<br/>(尽力而为)"]
         EnqAudit --> OKFast
     end
 
@@ -42,8 +42,7 @@ flowchart TD
         NextBatch --> Split["按 kind 拆分:<br/>archive_payloads / audit_payloads"]
 
         Split --> WriteArch{"archive_payloads 非空 ?"}
-        WriteArch -- "是" --> ArchWriter["ArchiveWriter.write_many<br/>(SQLAlchemy bulk insert)"]
-        ArchWriter --> TrainingWriter["TrainingConversationWriter.write_many_from_archive_payloads<br/>仅 passed chat 生成 trajectory"]
+        WriteArch -- "是" --> TrainingWriter["TrainingConversationWriter.write_many_from_archive_payloads<br/>仅 passed chat 生成 trajectory"]
         TrainingWriter --> WriteAudit{"audit_payloads 非空 ?"}
         WriteArch -- "否" --> WriteAudit
 
@@ -59,9 +58,6 @@ flowchart TD
     subgraph Image["图片资产 (文生图独立异步链路)"]
         direction TB
         ImgResp["/v1/images/* 响应回来"]
-        ImgResp --> ImgMeta["_build_image_metadata<br/>记录 prompt / size / urls / b64 数"]
-        ImgMeta --> ImgArchive["ArchivePayload (capability='image')<br/>→ archive_queue (同上)"]
-
         ImgResp --> ImgSchedule["asyncio.create_task<br/>_schedule_image_asset_archive"]
         ImgSchedule --> Archiver["ImageAssetArchiver"]
         Archiver --> DownLoop["对每个 url/b64:<br/>1. httpx 下载或 base64 解码<br/>2. sha256 + size + mime<br/>3. 写本地 /app/data/images/<br/>4. ImageAsset 行入库"]
@@ -70,10 +66,10 @@ flowchart TD
 
     %% ==================== 出口 ====================
     OKFast --> Client["响应回客户端<br/>(延迟 ≈ 上游延迟 + 数毫秒)"]
+    TrainingWriter --> DBArch
     AuditWriter --> DBArch
-    ArchWriter --> DBArch
     FallbackTask --> DBArch
-    DBArch[("PostgreSQL<br/>message_archives<br/>training_conversations<br/>audit_logs")]
+    DBArch[("PostgreSQL<br/>training_conversations<br/>audit_logs<br/>image_assets<br/>message_archives 已弃用")]
 
     %% ==================== 削峰指标 ====================
     subgraph Snap["snapshot() 暴露给 /admin/api/runtime"]
@@ -97,8 +93,8 @@ flowchart TD
     classDef img fill:#fff3cd,stroke:#b7791f,color:#000
     classDef db fill:#e8f5e9,stroke:#2e7d32,color:#000
     class Req,Scan,ForwardOrFake,AssembleNS,AssembleS,AuditAssemble,Collector,StreamEnd,OKFast,Drop,FallbackTask hot
-    class Loop,NextBatch,Split,ArchWriter,TrainingWriter,AuditWriter,TaskDone cold
-    class ImgResp,ImgMeta,ImgArchive,ImgSchedule,Archiver,DownLoop img
+    class Loop,NextBatch,Split,TrainingWriter,AuditWriter,TaskDone cold
+    class ImgResp,ImgSchedule,Archiver,DownLoop img
     class DBArch,DBAsset db
 ```
 
@@ -110,14 +106,14 @@ flowchart TD
 | `ARCHIVE_BATCH_SIZE` | 50 | 单次 bulk insert 大小 |
 | `ARCHIVE_FLUSH_INTERVAL_SECONDS` | 1 | 攒不满批时的最大等待 |
 | `ARCHIVE_MAX_PAYLOAD_BYTES` | 262144 | 单条 payload 上限 |
-| `STREAM_ARCHIVE_MAX_BYTES` | 见 settings | 流式响应归档截断阈值 |
+| `STREAM_ARCHIVE_MAX_BYTES` | 见 settings | 流式响应训练样本提取的最大收集字节数 |
 
 ## 关键设计要点（与代码一致）
 
 - **三段分离**：① Relay 同步组装 payload（CPU 操作，毫秒级）→ ② 投递内存 Queue（`put_nowait`，无阻塞）→ ③ 后台 worker 批量 flush（IO 操作，与主链路解耦）。
 - **背压策略**：队列满直接 `dropped += 1`，再 fallback 用 `asyncio.create_task` 尝试一次直写，**不阻塞**用户请求；丢弃数通过 `/admin/api/runtime` 暴露。
-- **流式归档**：`StreamArchiveCollector` 不缓存完整响应给用户，只另存一份截断副本到归档，**逐 chunk 仍实时透传给客户端**。
+- **流式训练样本**：`StreamArchiveCollector` 不缓存完整响应给用户，只在后台收集受限副本用于提取 `assistant_response`，**逐 chunk 仍实时透传给客户端**。
 - **批量写入**：`write_many` 用 SQLAlchemy bulk insert，把多次 commit 合并成一次，显著降低 PostgreSQL 压力。
-- **训练数据派生**：归档批量写入后，`TrainingConversationWriter` 仅从 `passed` 且未 block 的 Chat 归档派生 `training_conversations`，形成 messages + assistant response 的确定性 `trajectory`，供数据治理覆盖分析和清理使用。
+- **训练数据写入**：`TrainingConversationWriter` 仅从 `passed` 且未 block 的 Chat payload 生成 `training_conversations`，形成 messages + assistant response 的确定性 `trajectory`，供训练样本页、上线观测、覆盖分析和清理使用。
 - **优雅关闭**：`stop()` 先 `await queue.join()` 等积压排空再 cancel worker，避免丢数据。
 - **图片本体独立异步**：图片下载/解码是慢操作，单独走 `asyncio.create_task` + `ImageAssetArchiver`，不进归档队列，避免拖累文本归档批次。

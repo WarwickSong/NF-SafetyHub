@@ -5,6 +5,7 @@ import re
 from time import perf_counter
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
+from uuid import uuid4
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -18,9 +19,9 @@ from proxy.fake_response import generate_fake_response
 from proxy.header_policy import build_upstream_headers, filter_response_headers
 from proxy.stream import SSEStreamProxy
 from proxy.upstream_router import UpstreamRouter, get_default_upstream_router
-from storage.archive import ArchivePayload, ArchiveWriter
+from storage.archive import ArchivePayload
 from storage.audit import AuditPayload, AuditWriter
-from storage.image_assets import ImageAssetArchiver, extract_image_asset_sources, sanitize_image_response_payload
+from storage.image_assets import ImageAssetArchiver, extract_image_asset_sources
 from storage.training import TrainingConversationWriter
 
 STREAM_ARCHIVE_ENCODING = "utf-8"
@@ -101,7 +102,7 @@ async def relay_openai_compatible(request: Request, upstream_path: str):
     if path == CHAT_COMPLETIONS_PATH and not is_stream:
         _write_chat_archive(request, original_body, body, _response_archive_body(response), scan_result, action_taken, is_stream, started_at, identity)
     elif path.startswith("/v1/images/"):
-        _write_image_archive(request, original_body, response, started_at, identity)
+        await _write_image_archive(request, original_body, response, started_at, identity)
     return response
 
 
@@ -387,7 +388,7 @@ def _write_chat_archive(
 ) -> None:
     if not isinstance(original_body, dict):
         return
-    request_id = getattr(request.state, "request_id", "")
+    request_id = getattr(request.state, "request_id", "") or uuid4().hex
     matched_rule_ids = [result.rule_id for result in scan_result.results if result.hit and result.rule_id] if scan_result else []
     block_result = scan_result.block_result if scan_result else None
     payload = ArchivePayload(
@@ -410,13 +411,13 @@ def _write_chat_archive(
     archive_queue = getattr(request.app.state, "archive_queue", None)
     if archive_queue is not None and archive_queue.enqueue_archive(payload):
         return
-    writer = getattr(request.app.state, "archive_writer", None)
+    writer = getattr(request.app.state, "training_writer", None)
     if writer is None:
         return
-    asyncio.create_task(_safe_write_archive(writer, payload, getattr(request.app.state, "training_writer", None)))
+    asyncio.create_task(_safe_write_training(writer, payload))
 
 
-def _write_image_archive(
+async def _write_image_archive(
     request: Request,
     original_body: Any,
     response: Response | StreamingResponse,
@@ -425,48 +426,9 @@ def _write_image_archive(
 ) -> None:
     if not isinstance(original_body, dict) or isinstance(response, StreamingResponse):
         return
-    request_id = getattr(request.state, "request_id", "")
+    request_id = getattr(request.state, "request_id", "") or uuid4().hex
     response_payload = _parse_response_json(response)
-    archived_response_payload = sanitize_image_response_payload(response_payload)
-    metadata = _build_image_metadata(original_body, response_payload)
-    asyncio.create_task(_schedule_image_asset_archive(request, request_id, response_payload))
-    payload = ArchivePayload(
-        request_id=request_id,
-        user_id=identity.user_id if identity else "",
-        api_key_id=identity.api_key_id if identity else "",
-        model=original_body.get("model", ""),
-        capability="image",
-        prompt_original=original_body.get("prompt", ""),
-        prompt_desensitized=original_body.get("prompt", ""),
-        response={"media_type": response.media_type or "", "content": archived_response_payload},
-        image_metadata=metadata,
-        latency_ms=int((perf_counter() - started_at) * 1000),
-    )
-    archive_queue = getattr(request.app.state, "archive_queue", None)
-    if archive_queue is not None and archive_queue.enqueue_archive(payload):
-        return
-    writer = getattr(request.app.state, "archive_writer", None)
-    if writer is None:
-        return
-    asyncio.create_task(_safe_write_archive(writer, payload))
-
-
-def _build_image_metadata(request_body: dict[str, Any], response_payload: Any) -> dict[str, Any]:
-    references = _extract_image_response_references(response_payload)
-    return {
-        "prompt": request_body.get("prompt", ""),
-        "model": request_body.get("model", ""),
-        "size": request_body.get("size", ""),
-        "style": request_body.get("style", ""),
-        "n": request_body.get("n", 1),
-        "response_url_count": len(references["urls"]),
-        "response_urls": references["urls"],
-        "response_b64_count": references["b64_count"],
-        "response_b64_present": references["b64_count"] > 0,
-        "asset_count": len(references["assets"]),
-        "asset_sources": references["asset_sources"],
-        "asset_archive_status": "scheduled" if references["assets"] else "none",
-    }
+    await _schedule_image_asset_archive(request, request_id, response_payload)
 
 
 def _parse_response_json(response: Response) -> Any:
@@ -541,11 +503,9 @@ def _write_chat_audit(
     asyncio.create_task(_safe_write_audit(writer, payload))
 
 
-async def _safe_write_archive(writer: ArchiveWriter, payload: ArchivePayload, training_writer: TrainingConversationWriter | None = None) -> None:
+async def _safe_write_training(writer: TrainingConversationWriter, payload: ArchivePayload) -> None:
     try:
-        await writer.write(payload)
-        if training_writer is not None:
-            await training_writer.write_from_archive_payload(payload)
+        await writer.write_from_archive_payload(payload)
     except Exception:
         return
 

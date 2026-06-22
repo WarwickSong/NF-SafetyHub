@@ -38,10 +38,10 @@ flowchart TD
     Modules --> Runtime["2. 运行状态<br/>GET /admin/api/runtime"]
     Runtime --> Snapshot["快照拼装<br/>get_v1_concurrency_snapshot<br/>archive_queue.snapshot()<br/>upstream pool 配置<br/>disk space"]
 
-    %% ===== 消息归档 =====
-    Modules --> Archives["3. 消息归档<br/>GET /admin/api/archives?<br/>user/model/action/keyword/时间窗"]
-    Archives --> ArchiveReader["ArchiveReader.list / get / stats"]
-    ArchiveReader --> DBArch[("PostgreSQL<br/>message_archives")]
+    %% ===== 训练样本 =====
+    Modules --> Archives["3. 训练样本<br/>GET /admin/api/archives?<br/>user/model/action/keyword/时间窗"]
+    Archives --> TrainingReader["TrainingConversationReader.list / get / stats"]
+    TrainingReader --> DBTrain[("PostgreSQL<br/>training_conversations")]
 
     %% ===== 图片资产 =====
     Modules --> Images["4. 图片资产<br/>GET /admin/api/image-assets"]
@@ -54,7 +54,7 @@ flowchart TD
 
     %% ===== 观测 =====
     Modules --> Obs["6. 观测<br/>GET /admin/api/observations/recent"]
-    Obs --> ArchiveReader
+    Obs --> TrainingReader
 
     %% ===== 规则管理 =====
     Modules --> Rules["7. 规则管理<br/>GET /admin/api/rules<br/>PATCH /admin/api/rules/{id}<br/>POST /admin/api/rules/reload"]

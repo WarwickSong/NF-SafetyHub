@@ -38,15 +38,6 @@ def get_session_factory() -> async_sessionmaker:
 
 
 SQLITE_LEGACY_COLUMNS = {
-    "message_archives": {
-        "prompt_original": "TEXT DEFAULT ''",
-        "prompt_desensitized": "TEXT DEFAULT ''",
-        "is_desensitized": "BOOLEAN DEFAULT 0",
-        "action_taken": "VARCHAR(32) DEFAULT 'passed'",
-        "matched_rule_ids": "TEXT DEFAULT ''",
-        "image_metadata": "TEXT DEFAULT ''",
-        "security_policy_id": "VARCHAR(64) DEFAULT NULL",
-    },
     "image_assets": {
         "request_id": "VARCHAR(64) DEFAULT ''",
         "source_index": "INTEGER DEFAULT 0",

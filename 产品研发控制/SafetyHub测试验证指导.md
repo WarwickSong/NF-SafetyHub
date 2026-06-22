@@ -59,7 +59,7 @@ cd <SafetyHub项目根目录>
 最近一次本地复核：96 passed, 2 failed
 ```
 
-当前已知提示：`datetime.utcnow()` 弃用警告已修复，ORM 时间字段统一使用 timezone-aware UTC。当前生产代码已继续演进，固定通过数不再作为唯一验收口径；最近一次本地复核的 2 个失败集中在 `tests/test_admin_auth.py` 的后台认证测试夹具未初始化 `message_archives` 表，生产应用生命周期会执行数据库初始化，不影响生产运行口径。生产上线验收仍应以当前环境复跑、专项测试、Docker/真实上游联调和压测结果为准。
+当前已知提示：`datetime.utcnow()` 弃用警告已修复，ORM 时间字段统一使用 timezone-aware UTC。当前生产代码已继续演进，固定通过数不再作为唯一验收口径；最近专项验证覆盖训练样本、上线观测、数据治理和中继链路，命令为 `.venv/bin/python -m pytest tests/test_admin_stage4.py tests/test_observations.py tests/test_data_governance.py tests/test_relay.py -q`，结果 `32 passed`。生产上线验收仍应以当前环境复跑、专项测试、Docker/真实上游联调和压测结果为准。
 
 ### 3.4 分模块测试
 
@@ -358,24 +358,24 @@ Invoke-WebRequest -Uri http://127.0.0.1:8000/v1/chat/completions -Method Post -C
 - 响应内容原样透传，不做响应侧脱敏。
 - 非 Chat 接口默认透明透传，不执行阶段 2 脱敏改写。
 
-### 7.5 阶段 3 归档、审计与观测 API 验证
+### 7.5 阶段 3/6A 训练样本、审计与观测 API 验证
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_archive.py tests\test_audit.py tests\test_models.py tests\test_observations.py tests\test_header_policy.py tests\test_relay.py
+.\.venv\Scripts\python.exe -m pytest tests\test_training.py tests\test_audit.py tests\test_models.py tests\test_observations.py tests\test_header_policy.py tests\test_relay.py
 ```
 
 预期：
 
-- Chat 非流式正常请求、脱敏请求、拦截请求可写入归档。
-- Chat 流式请求可归档完整 SSE 响应内容，并提取 `message_content`。
-- 文生图请求可写入 prompt、model、size、style、n、响应 URL 和 b64 存在状态，并异步归档 b64_json / URL 图片本体、sha256、mime_type、size_bytes 和下载/解码状态。
-- 归档中可区分 `prompt_original` 与 `prompt_desensitized`。
+- Chat passed 请求写入 `training_conversations`，形成 messages + assistant response 的 trajectory。
+- Chat block / desensitize / warn 证据写入 `audit_logs`，不依赖完整归档表追溯。
+- 文生图请求异步归档 b64_json / URL 图片本体、sha256、mime_type、size_bytes 和下载/解码状态，写入 `image_assets`。
+- `message_archives` 旧完整归档表已从当前模型和运行链路移除，当前运行链路和管理员页面不再写入、不再读取。
 - 命中事件可写入 `audit_logs`，并记录规则 ID、级别、命中片段和全文 hash。
-- `/admin/api/observations/recent` 可返回最近少量完整 Chat 样本，包含 role、原始/脱敏 messages、响应和命中动作。
+- `/admin/api/observations/recent` 可返回最近少量训练样本，包含 role、messages、assistant response 和脱敏状态。
 - APIKey 映射、审批、SafetyHub 安全策略相关 schema 预留表和字段可通过 `create_all` 创建；模型/token/资源权限和配额字段不进入 SafetyHub APIKey schema。
 - Header 可选上游 Key 替换分支可测试，`upstream_api_key=None` 时透传行为不变。
 - `/admin/api/*` 默认受 Basic Auth + IP 白名单保护。
-- 归档/审计异常不影响 relay 主链路。
+- 训练样本、审计或图片资产异常不影响 relay 主链路。
 
 当前边界：阶段 3 已保存文生图图片本体和状态记录；图片资产后台预览/下载页面、存储配额和保留策略放入阶段 8。
 
@@ -670,14 +670,14 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 - [x] 非 Chat 接口默认透明透传。
 - [ ] 真实 token 成功返回模型结果的受控联调记录。
 
-### 阶段 3 当前已完成能力
+### 阶段 3/6A 当前已完成能力
 
-- [x] Chat 消息归档写入测试。
-- [x] 文生图元数据归档测试，确认元数据、响应引用、资产数量和异步调度状态。
+- [x] Chat passed 请求训练样本写入测试。
+- [x] 文生图图片资产调度测试，确认响应引用提取和异步调度状态。
 - [x] 文生图图片本体异步归档测试，覆盖 b64_json 解码保存、URL 下载状态记录和失败降级。
 - [x] 图片资产状态 API 鉴权测试。
-- [x] 归档失败降级测试。
-- [x] Chat 流式响应归档测试。
+- [x] 训练样本/审计/图片资产失败降级测试。
+- [x] Chat 流式响应训练样本提取测试。
 - [x] 基础审计事件测试。
 - [x] R1~R9 schema 预留测试。
 - [x] Header 可选上游 Key 替换分支测试。

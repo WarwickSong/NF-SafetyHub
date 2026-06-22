@@ -34,7 +34,7 @@ flowchart LR
 
             subgraph DBBox["容器: safetyhub-postgres (postgres:16-alpine)"]
                 PG["PostgreSQL 5432<br/>asyncpg + SQLAlchemy<br/>healthcheck: pg_isready"]
-                PGTables[("表:<br/>message_archives<br/>training_conversations<br/>data_governance_jobs<br/>audit_logs<br/>image_assets<br/>api_keys<br/>admin_operations")]
+                PGTables[("表:<br/>training_conversations<br/>data_governance_jobs<br/>audit_logs<br/>image_assets<br/>api_keys<br/>admin_operations<br/>message_archives 已弃用兼容")]
                 PG --> PGTables
             end
         end
@@ -117,7 +117,7 @@ flowchart LR
 
 - **客户端 → Nginx**：用 SafetyHub 颁发的 Bearer Key（K-Sync 默认与上游 Key 同值）。
 - **App → 中转站**：用 `RequestIdentity.upstream_api_key`（已解密）替换 Authorization，客户端原始 Authorization 不会出网。
-- **响应回流**：上游 → App 后立即流回客户端，归档/审计通过 `ArchiveQueue` 异步落 PostgreSQL，不阻塞主链路。
+- **响应回流**：上游 → App 后立即流回客户端；训练样本、审计证据和图片资产通过异步链路落 PostgreSQL，不阻塞主链路。
 - **管理员通道独立**：`/admin/*` 不进入 `/v1/*` 并发队列，压测期间仍可访问后台。
 - **可选 IP 白名单**：`ADMIN_IP_WHITELIST` 可只放行 IT 管理员网段访问 `/admin/`。
 

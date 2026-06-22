@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from config import settings
-from storage.archive import ArchivePayload, ArchiveWriter
+from storage.archive import ArchivePayload
 from storage.audit import AuditPayload, AuditWriter
 from storage.training import TrainingConversationWriter
 
@@ -20,14 +20,12 @@ class ArchiveQueueItem:
 class ArchiveQueue:
     def __init__(
         self,
-        archive_writer: ArchiveWriter | None = None,
         audit_writer: AuditWriter | None = None,
         training_writer: TrainingConversationWriter | None = None,
         max_size: int | None = None,
         batch_size: int | None = None,
         flush_interval_seconds: float | None = None,
     ):
-        self._archive_writer = archive_writer or ArchiveWriter()
         self._audit_writer = audit_writer or AuditWriter()
         self._training_writer = training_writer or TrainingConversationWriter()
         self._queue: asyncio.Queue[ArchiveQueueItem] = asyncio.Queue(maxsize=max(1, max_size or settings.archive_queue_max_size))
@@ -82,9 +80,7 @@ class ArchiveQueue:
             audit_payloads = [item.payload for item in batch if item.kind == "audit"]
             try:
                 if archive_payloads:
-                    await self._archive_writer.write_many(archive_payloads)
-                    with suppress(Exception):
-                        await self._training_writer.write_many_from_archive_payloads(archive_payloads)
+                    await self._training_writer.write_many_from_archive_payloads(archive_payloads)
                     self._processed += len(archive_payloads)
                 if audit_payloads:
                     await self._audit_writer.write_many(audit_payloads)
