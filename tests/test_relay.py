@@ -11,6 +11,7 @@ from engine.rules_keyword import KeywordScanner
 from engine.rules_regex import RegexScanner
 from engine.scanner import ScannerOrchestrator
 from proxy.relay import (
+    _stream_archive_body,
     desensitize_chat_request_body,
     extract_latest_text_from_messages,
     extract_text_from_messages,
@@ -669,10 +670,10 @@ def test_chat_completions_stream_writes_training_payload(relay_test_app, monkeyp
 
     async def handler(_request: httpx.Request) -> httpx.Response:
         stream_body = (
-            'data: {"choices":[{"delta":{"content":"你"},"finish_reason":null}]}\\n\\n'
-            'data: {"choices":[{"delta":{"content":"好"},"finish_reason":null}]}\\n\\n'
-            'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\\n\\n'
-            'data: [DONE]\\n\\n'
+            'data: {"choices":[{"delta":{"content":"你"},"finish_reason":null}]}\n\n'
+            'data: {"choices":[{"delta":{"content":"好"},"finish_reason":null}]}\n\n'
+            'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'
+            'data: [DONE]\n\n'
         )
         return httpx.Response(200, content=stream_body, headers={"content-type": "text/event-stream"})
 
@@ -693,13 +694,30 @@ def test_chat_completions_stream_writes_training_payload(relay_test_app, monkeyp
         )
 
     assert response.status_code == 200
-    assert response.text.endswith("data: [DONE]\\n\\n")
+    assert response.text.endswith("data: [DONE]\n\n")
     assert len(training_payloads) == 1
     assert training_payloads[0].is_stream is True
     assert training_payloads[0].response["stream"] is True
     assert training_payloads[0].response["message_content"] == "你好"
     assert training_payloads[0].response["truncated"] is False
     assert '"content":"你"' in training_payloads[0].response["content"]
+
+
+def test_stream_archive_body_preserves_json_escaped_newlines():
+    stream_body = (
+        'data: {"choices":[{"delta":{"content":"好的，总结一下：\\n\\n- **TKE 管理平台**：从 L200 降到 **L50**\\n- **EIP 负载均衡**：从 20M 降到 12M"}}]}\n\n'
+        'data: {"choices":[{"delta":{"content":"\\n- **大文件处理**：`>5MB` 的文件建议走 COS/CDN，不要走业务 EIP"}}]}\n\n'
+        'data: [DONE]\n\n'
+    )
+
+    payload = _stream_archive_body([stream_body.encode("utf-8")])
+
+    assert payload["message_content"] == (
+        "好的，总结一下：\n\n"
+        "- **TKE 管理平台**：从 L200 降到 **L50**\n"
+        "- **EIP 负载均衡**：从 20M 降到 12M\n"
+        "- **大文件处理**：`>5MB` 的文件建议走 COS/CDN，不要走业务 EIP"
+    )
 
 
 def test_stream_archive_body_truncates_large_sse_response(monkeypatch):

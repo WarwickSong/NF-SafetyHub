@@ -282,7 +282,7 @@ def _normalize_content(content: Any) -> Any:
 
 
 def _normalize_text(value: str) -> str:
-    return " ".join(value.split())
+    return value.replace("\r\n", "\n").replace("\r", "\n").strip()
 
 
 def _loads_json(value: Any) -> Any:

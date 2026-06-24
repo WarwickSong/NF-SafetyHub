@@ -4,7 +4,7 @@ from storage.training import _extract_assistant_response, _normalize_messages
 
 def test_extract_assistant_response_from_non_stream_archive_body():
     payload = {"content": '{"choices":[{"message":{"content":"hello   world"}}]}'}
-    assert _extract_assistant_response(payload) == "hello world"
+    assert _extract_assistant_response(payload) == "hello   world"
 
 
 def test_extract_assistant_response_ignores_truncated_stream():
@@ -14,7 +14,12 @@ def test_extract_assistant_response_ignores_truncated_stream():
 
 def test_normalize_messages_keeps_structured_roles_and_content():
     messages = [{"role": "user", "content": "  hello\nworld  "}]
-    assert _normalize_messages(messages) == [{"role": "user", "content": "hello world"}]
+    assert _normalize_messages(messages) == [{"role": "user", "content": "hello\nworld"}]
+
+
+def test_normalize_messages_preserves_multiline_markdown_spacing():
+    messages = [{"role": "assistant", "content": "\r\n- **标题**：内容\r\n  - 子项  保留空格\r\n"}]
+    assert _normalize_messages(messages) == [{"role": "assistant", "content": "- **标题**：内容\n  - 子项  保留空格"}]
 
 
 def test_training_candidate_payload_shape_keeps_prompt_and_response_separate():

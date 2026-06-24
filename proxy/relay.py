@@ -350,7 +350,7 @@ def _stream_archive_body(chunks: list[bytes]) -> dict[str, Any]:
 
 def _extract_sse_message_content(raw_content: str) -> str:
     parts: list[str] = []
-    normalized_content = raw_content.replace("\\r\\n", "\n").replace("\\n", "\n")
+    normalized_content = raw_content.replace("\r\n", "\n").replace("\r", "\n")
     for line in normalized_content.splitlines():
         if not line.startswith("data:"):
             continue
