@@ -266,9 +266,10 @@ async def _stream_with_archive(
             collector.add(chunk)
             yield chunk
     finally:
+        payload = collector.payload()
+        _write_chat_archive(request, original_body, archive_body, payload, scan_result, action_taken, True, started_at, identity)
         if client_owner:
             await client.aclose()
-        _write_chat_archive(request, original_body, archive_body, collector.payload(), scan_result, action_taken, True, started_at, identity)
 
 
 def _build_response(upstream_response: httpx.Response) -> Response:

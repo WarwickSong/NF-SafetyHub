@@ -223,7 +223,7 @@ def _conversation_from_payload(payload: ArchivePayload) -> TrainingConversation 
 
 
 def _is_training_candidate(payload: ArchivePayload) -> bool:
-    return payload.capability == "chat" and payload.action_taken == "passed" and not payload.is_blocked
+    return payload.capability == "chat" and payload.action_taken in {"passed", "desensitized"} and not payload.is_blocked
 
 
 def _extract_assistant_response(response: Any) -> str:
