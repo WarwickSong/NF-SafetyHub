@@ -241,6 +241,19 @@ class AdminLoginRequest(BaseModel):
     password: str
 
 
+class AdminSettingsResponse(BaseModel):
+    training_capture_enabled: bool
+
+
+class TrainingCaptureUpdateRequest(BaseModel):
+    enabled: bool
+
+
+class TrainingCaptureUpdateResponse(BaseModel):
+    status: str
+    training_capture_enabled: bool
+
+
 class AdminLoginResponse(BaseModel):
     status: str
     message: str

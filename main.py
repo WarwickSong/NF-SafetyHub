@@ -24,6 +24,7 @@ from storage.audit import AuditWriter
 from storage.database import close_db, get_session_factory, init_db
 from storage.data_governance import DataGovernanceService
 from storage.training import TrainingConversationReader, TrainingConversationWriter
+from storage.runtime_settings import RuntimeSettingsService
 from governance.api_keys import ApiKeyService
 from governance.key_provider import create_key_provider
 
@@ -56,7 +57,10 @@ async def lifespan(app: FastAPI):
     app.state.training_writer = TrainingConversationWriter(app.state.session_factory)
     app.state.training_conversation_reader = TrainingConversationReader(app.state.session_factory)
     app.state.data_governance_service = DataGovernanceService(app.state.session_factory)
-    app.state.archive_queue = ArchiveQueue(app.state.audit_writer, app.state.training_writer)
+    app.state.runtime_settings_service = RuntimeSettingsService(app.state.session_factory)
+    await app.state.runtime_settings_service.refresh()
+    app.state.runtime_settings_service.start()
+    app.state.archive_queue = ArchiveQueue(app.state.audit_writer, app.state.training_writer, runtime_settings=app.state.runtime_settings_service)
     app.state.archive_queue.start()
     app.state.admin_stats_cache = AdminStatsCache()
     app.state.rules_reload_task = reload_task
@@ -64,6 +68,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await app.state.archive_queue.stop()
+        await app.state.runtime_settings_service.stop()
         await app.state.upstream_client.aclose()
         reload_task.cancel()
         with suppress(asyncio.CancelledError):

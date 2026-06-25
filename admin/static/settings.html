@@ -20,7 +20,13 @@
     <a class="active" href="/admin/settings.html">设置</a>
   </nav>
   <main class="content">
-    <header class="topbar"><div><h1>系统设置</h1><p>阶段 4 提供运行状态和操作审计入口。</p></div><button class="button" data-refresh>刷新</button></header>
+    <header class="topbar"><div><h1>系统设置</h1><p>运行时开关、健康状态和操作审计入口。</p></div><button class="button" data-refresh>刷新</button></header>
+    <section class="card">
+      <h2>训练样本记录</h2>
+      <p class="form-hint">关闭后，新请求不会写入训练样本、上线观测和数据治理训练池；安全审计与拦截记录不受影响。</p>
+      <label class="checkbox-row"><input id="trainingCaptureEnabled" type="checkbox"> 记录训练样本</label>
+      <div class="form-actions"><button class="button" id="saveTrainingCapture">保存设置</button><span id="trainingCaptureStatus" class="form-hint">加载中...</span></div>
+    </section>
     <section class="card"><h2>管理端健康</h2><pre id="adminHealth">加载中...</pre></section>
     <section class="card"><h2>管理员操作日志</h2><div class="table-wrap"><table><thead><tr><th>ID</th><th>管理员</th><th>操作</th><th>资源</th><th>时间</th></tr></thead><tbody id="adminOpsTable"></tbody></table></div></section>
   </main>

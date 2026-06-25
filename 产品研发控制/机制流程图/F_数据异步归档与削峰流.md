@@ -69,7 +69,7 @@ flowchart TD
     TrainingWriter --> DBArch
     AuditWriter --> DBArch
     FallbackTask --> DBArch
-    DBArch[("PostgreSQL<br/>training_conversations<br/>audit_logs<br/>image_assets<br/>message_archives 已弃用")]
+    DBArch[("PostgreSQL<br/>training_conversations<br/>audit_logs<br/>image_assets")]
 
     %% ==================== 削峰指标 ====================
     subgraph Snap["snapshot() 暴露给 /admin/api/runtime"]

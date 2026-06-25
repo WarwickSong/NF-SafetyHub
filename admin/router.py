@@ -14,6 +14,7 @@ from admin.schemas import (
     AdminOperationItem,
     AdminOperationListResponse,
     AdminStatsResponse,
+    AdminSettingsResponse,
     ApiKeyBulkReplaceItem,
     ApiKeyBulkReplaceRequest,
     ApiKeyBulkReplaceResponse,
@@ -51,6 +52,8 @@ from admin.schemas import (
     RuleToggleRequest,
     RuntimeStatusResponse,
     TrendPoint,
+    TrainingCaptureUpdateRequest,
+    TrainingCaptureUpdateResponse,
 )
 from config import settings
 from governance.api_keys import ApiKeyCreate, ApiKeyService, key_prefix, key_suffix, parse_bulk_replace_csv
@@ -63,6 +66,7 @@ from storage.database import get_session_factory
 from storage.data_governance import CoverageAnalysisConfig, DataGovernanceService
 from storage.image_assets import ImageAssetReader
 from storage.models import AdminOperation, ApiKeyRecord, AuditLog, ImageAsset, TrainingConversation
+from storage.runtime_settings import RuntimeSettingsService
 from storage.training import TrainingConversationQuery, TrainingConversationReader
 
 router = APIRouter(dependencies=[Depends(require_admin_access)])
@@ -384,6 +388,22 @@ async def admin_health():
     return {"status": "ok"}
 
 
+@router.get("/settings", response_model=AdminSettingsResponse)
+async def get_admin_settings(request: Request):
+    snapshot = await _runtime_settings_service(request).snapshot()
+    return AdminSettingsResponse(training_capture_enabled=snapshot.training_capture_enabled)
+
+
+@router.put("/settings/training-capture", response_model=TrainingCaptureUpdateResponse)
+async def update_training_capture(request: Request, payload: TrainingCaptureUpdateRequest):
+    snapshot = await _runtime_settings_service(request).set_training_capture_enabled(
+        payload.enabled,
+        updated_by=getattr(request.state, "admin_user", ""),
+    )
+    await _write_admin_operation(request, "settings.update_training_capture", "runtime_settings", str(snapshot.training_capture_enabled).lower())
+    return TrainingCaptureUpdateResponse(status="ok", training_capture_enabled=snapshot.training_capture_enabled)
+
+
 @router.get("/runtime", response_model=RuntimeStatusResponse)
 async def runtime_status(request: Request):
     active_settings = getattr(request.app.state, "settings", settings)
@@ -573,6 +593,10 @@ def _image_asset_reader(request: Request) -> ImageAssetReader:
 
 def _data_governance_service(request: Request) -> DataGovernanceService:
     return getattr(request.app.state, "data_governance_service", None) or DataGovernanceService(_session_factory(request))
+
+
+def _runtime_settings_service(request: Request) -> RuntimeSettingsService:
+    return getattr(request.app.state, "runtime_settings_service", None) or RuntimeSettingsService(_session_factory(request))
 
 
 def _admin_operation_writer(request: Request) -> AdminOperationWriter:

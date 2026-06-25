@@ -3,7 +3,7 @@ from sqlalchemy import inspect, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from storage.database import POSTGRES_LEGACY_COLUMNS
-from storage.models import ApiKeyRecord, ApprovalChain, ApprovalRequest, Base, ImageAsset, SecurityPolicy
+from storage.models import ApiKeyRecord, ApprovalChain, ApprovalRequest, Base, ImageAsset, RuntimeSetting, SecurityPolicy
 
 
 @pytest.mark.asyncio
@@ -15,6 +15,7 @@ async def test_stage3_reserved_tables_are_created_with_required_columns():
         api_key_columns = await conn.run_sync(lambda sync_conn: {column["name"] for column in inspect(sync_conn).get_columns("api_keys")})
         approval_request_columns = await conn.run_sync(lambda sync_conn: {column["name"] for column in inspect(sync_conn).get_columns("approval_requests")})
         image_asset_columns = await conn.run_sync(lambda sync_conn: {column["name"] for column in inspect(sync_conn).get_columns("image_assets")})
+        runtime_setting_columns = await conn.run_sync(lambda sync_conn: {column["name"] for column in inspect(sync_conn).get_columns("runtime_settings")})
 
     assert {
         "audit_logs",
@@ -23,6 +24,7 @@ async def test_stage3_reserved_tables_are_created_with_required_columns():
         "security_policies",
         "approval_chains",
         "image_assets",
+        "runtime_settings",
     }.issubset(table_names)
     assert {
         "provider_name",
@@ -47,6 +49,7 @@ async def test_stage3_reserved_tables_are_created_with_required_columns():
         "error",
         "completed_at",
     }.issubset(image_asset_columns)
+    assert {"key", "value", "description", "updated_by", "created_at", "updated_at"}.issubset(runtime_setting_columns)
 
     await engine.dispose()
 

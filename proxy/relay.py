@@ -389,6 +389,8 @@ def _write_chat_archive(
 ) -> None:
     if not isinstance(original_body, dict):
         return
+    if not _training_capture_enabled(request):
+        return
     request_id = getattr(request.state, "request_id", "") or uuid4().hex
     matched_rule_ids = [result.rule_id for result in scan_result.results if result.hit and result.rule_id] if scan_result else []
     block_result = scan_result.block_result if scan_result else None
@@ -416,6 +418,11 @@ def _write_chat_archive(
     if writer is None:
         return
     asyncio.create_task(_safe_write_training(writer, payload))
+
+
+def _training_capture_enabled(request: Request) -> bool:
+    runtime_settings = getattr(request.app.state, "runtime_settings_service", None)
+    return bool(getattr(runtime_settings, "training_capture_enabled", True))
 
 
 async def _write_image_archive(

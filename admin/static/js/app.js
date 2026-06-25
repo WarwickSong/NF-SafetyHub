@@ -841,10 +841,37 @@ async function runDataCleanup() {
 }
 
 async function loadSettings() {
+  await loadAdminSettings();
+  document.getElementById("saveTrainingCapture")?.addEventListener("click", saveTrainingCaptureSetting);
   const health = await SafetyHub.api("/admin/api/health");
   document.getElementById("adminHealth").textContent = SafetyHub.json(health);
   const ops = await SafetyHub.api("/admin/api/admin-ops?limit=50");
   document.getElementById("adminOpsTable").innerHTML = ops.items.map((item) => `<tr><td>${item.id}</td><td>${item.admin_user || "-"}</td><td>${item.operation}</td><td>${item.resource_type}:${item.resource_id}</td><td>${SafetyHub.time(item.created_at)}</td></tr>`).join("");
+}
+
+async function loadAdminSettings() {
+  const settings = await SafetyHub.api("/admin/api/settings");
+  const checkbox = document.getElementById("trainingCaptureEnabled");
+  if (checkbox) checkbox.checked = Boolean(settings.training_capture_enabled);
+  setTrainingCaptureStatus(settings.training_capture_enabled);
+}
+
+async function saveTrainingCaptureSetting() {
+  const checkbox = document.getElementById("trainingCaptureEnabled");
+  const status = document.getElementById("trainingCaptureStatus");
+  if (!checkbox || !status) return;
+  status.textContent = "保存中...";
+  const response = await SafetyHub.api("/admin/api/settings/training-capture", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled: checkbox.checked })
+  });
+  setTrainingCaptureStatus(response.training_capture_enabled, "已保存");
+}
+
+function setTrainingCaptureStatus(enabled, prefix = "当前状态") {
+  const status = document.getElementById("trainingCaptureStatus");
+  if (status) status.textContent = `${prefix}：${enabled ? "已开启" : "已关闭"}`;
 }
 
 async function loadPlaceholder() {

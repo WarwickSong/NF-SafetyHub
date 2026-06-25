@@ -187,3 +187,39 @@ def test_admin_login_rejects_wrong_password():
         )
 
     assert response.status_code == 401
+
+
+def test_admin_settings_training_capture_can_be_toggled():
+    app = create_test_app(Settings(admin_password="strong-local-password"))
+
+    class FakeSnapshot:
+        training_capture_enabled = True
+
+    class FakeRuntimeSettingsService:
+        async def snapshot(self):
+            return FakeSnapshot()
+
+        async def set_training_capture_enabled(self, enabled, updated_by=""):
+            snapshot = FakeSnapshot()
+            snapshot.training_capture_enabled = enabled
+            return snapshot
+
+    class FakeAdminOperationWriter:
+        async def write(self, payload):
+            return None
+
+    app.state.runtime_settings_service = FakeRuntimeSettingsService()
+    app.state.admin_operation_writer = FakeAdminOperationWriter()
+
+    with TestClient(app) as client:
+        get_response = client.get("/admin/api/settings", auth=("admin", "strong-local-password"))
+        put_response = client.put(
+            "/admin/api/settings/training-capture",
+            json={"enabled": False},
+            auth=("admin", "strong-local-password"),
+        )
+
+    assert get_response.status_code == 200
+    assert get_response.json()["training_capture_enabled"] is True
+    assert put_response.status_code == 200
+    assert put_response.json()["training_capture_enabled"] is False

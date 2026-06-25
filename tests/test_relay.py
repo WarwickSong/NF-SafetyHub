@@ -330,6 +330,56 @@ def test_chat_completions_archives_and_audits_desensitized_request(relay_test_ap
     assert audit_payloads[0].action_taken == "desensitized"
 
 
+def test_chat_completions_skips_training_when_capture_disabled_but_keeps_audit(relay_test_app, monkeypatch):
+    training_payloads = []
+    audit_payloads = []
+
+    class FakeRuntimeSettings:
+        training_capture_enabled = False
+
+    class FakeTrainingWriter:
+        async def write_from_archive_payload(self, payload):
+            training_payloads.append(payload)
+
+    class FakeAuditWriter:
+        async def write_scan_result(self, payload):
+            audit_payloads.append(payload)
+            return []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-upstream",
+                "object": "chat.completion",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "上游原样响应"}, "finish_reason": "stop"}],
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    original_async_client = httpx.AsyncClient
+
+    def build_client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", build_client)
+    relay_test_app.state.runtime_settings_service = FakeRuntimeSettings()
+    relay_test_app.state.training_writer = FakeTrainingWriter()
+    relay_test_app.state.audit_writer = FakeAuditWriter()
+
+    with TestClient(relay_test_app) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={"model": "gpt-test", "messages": [{"role": "user", "content": "我的手机号是 13812345678"}]},
+        )
+
+    assert response.status_code == 200
+    assert training_payloads == []
+    assert len(audit_payloads) == 1
+    assert audit_payloads[0].action_taken == "desensitized"
+
+
 def test_chat_completions_desensitizes_phone_before_relay(relay_test_client, monkeypatch):
     captured = {}
 

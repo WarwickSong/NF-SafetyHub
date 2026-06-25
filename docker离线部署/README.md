@@ -134,8 +134,7 @@ sudo bash scripts/install.sh
 2. 安装 compose v2 到 `/usr/local/lib/docker/cli-plugins/docker-compose`，
    并在 `/usr/local/bin/docker-compose` 留软链接。
 3. 注册并启动 `containerd.service` / `docker.socket` / `docker.service`。
-4. 解压 `app-bundle/safetyhub_intranet_bundle_*.tar.gz` 到 `app-bundle/_extracted/`，
-   调用其内置 `install.sh`：`docker load` 镜像 → 启动 PostgreSQL → 保留 `api_keys` 表并重建其他业务表 → 启动 SafetyHub/Nginx。
+4. 解压 `app-bundle/safetyhub_intranet_bundle_*.tar.gz` 到 `app-bundle/_extracted/`，调用其内置 `install.sh`：`docker load` 镜像 → 启动 PostgreSQL → 重建业务表前先用 `pg_dump` 把现有 `api_keys` 表备份到持久化数据盘（备份失败则中止部署）→ 保留 `api_keys` 表并重建其他业务表 → 启动 SafetyHub/Nginx。
 
 可选环境变量：
 

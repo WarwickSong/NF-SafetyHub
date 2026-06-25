@@ -9,9 +9,9 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from storage.database import close_db, engine, init_db
-from storage.models import ApiKeyRecord, Base
+from storage.models import ApiKeyRecord, Base, RuntimeSetting
 
-PRESERVED_TABLES = {ApiKeyRecord.__tablename__}
+PRESERVED_TABLES = {ApiKeyRecord.__tablename__, RuntimeSetting.__tablename__}
 
 
 async def main() -> None:

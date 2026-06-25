@@ -971,23 +971,19 @@ class ApprovalChain(Base):
 class ImageAsset(Base):
     __tablename__ = "image_assets"
 
-    id = Column(String(64), primary_key=True)
-    request_id = Column(String(64), nullable=False, index=True)
-    user_id = Column(String(128), nullable=False, index=True)
-    model = Column(String(64), nullable=True, index=True)
-    prompt_hash = Column(String(64), nullable=True)
-    asset_index = Column(Integer, default=0)
-    source_type = Column(String(32), nullable=False)
-    source_url = Column(Text, nullable=True)
-    local_path = Column(Text, nullable=True)
-    sha256 = Column(String(64), nullable=True, index=True)
-    mime_type = Column(String(64), nullable=True)
-    size_bytes = Column(Integer, nullable=True)
-    width = Column(Integer, nullable=True)
-    height = Column(Integer, nullable=True)
-    download_status = Column(String(32), default="pending", index=True)
-    expires_at = Column(DateTime, nullable=True, index=True)
-    created_at = Column(DateTime, server_default=func.now(), index=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    request_id: Mapped[str] = mapped_column(String(64), index=True)
+    source_index: Mapped[int] = mapped_column(Integer, default=0)
+    source_type: Mapped[str] = mapped_column(String(32), index=True, default="")
+    source_url: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(32), index=True, default="pending")
+    local_path: Mapped[str] = mapped_column(Text, default="")
+    sha256: Mapped[str] = mapped_column(String(64), index=True, default="")
+    mime_type: Mapped[str] = mapped_column(String(64), default="")
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class FileScanRecord(Base):

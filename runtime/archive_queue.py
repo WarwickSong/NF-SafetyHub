@@ -25,9 +25,11 @@ class ArchiveQueue:
         max_size: int | None = None,
         batch_size: int | None = None,
         flush_interval_seconds: float | None = None,
+        runtime_settings=None,
     ):
         self._audit_writer = audit_writer or AuditWriter()
         self._training_writer = training_writer or TrainingConversationWriter()
+        self._runtime_settings = runtime_settings
         self._queue: asyncio.Queue[ArchiveQueueItem] = asyncio.Queue(maxsize=max(1, max_size or settings.archive_queue_max_size))
         self._batch_size = max(1, batch_size or settings.archive_batch_size)
         self._flush_interval_seconds = max(0.01, flush_interval_seconds or settings.archive_flush_interval_seconds)
@@ -79,7 +81,7 @@ class ArchiveQueue:
             archive_payloads = [item.payload for item in batch if item.kind == "archive"]
             audit_payloads = [item.payload for item in batch if item.kind == "audit"]
             try:
-                if archive_payloads:
+                if archive_payloads and self._training_capture_enabled():
                     await self._training_writer.write_many_from_archive_payloads(archive_payloads)
                     self._processed += len(archive_payloads)
                 if audit_payloads:
@@ -90,6 +92,9 @@ class ArchiveQueue:
             finally:
                 for _ in batch:
                     self._queue.task_done()
+
+    def _training_capture_enabled(self) -> bool:
+        return bool(getattr(self._runtime_settings, "training_capture_enabled", True))
 
     async def _next_batch(self) -> list[ArchiveQueueItem]:
         first = await self._queue.get()
