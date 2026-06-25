@@ -114,7 +114,9 @@ def _logs_from_payload(payload: AuditPayload) -> list[AuditLog]:
     results = _extract_results(payload.scan_result)
     if not results:
         return []
-    full_text_hash = _hash_text(payload.scanned_text or _normalized_text(payload.scan_result))
+    normalized_text = _normalized_text(payload.scan_result)
+    audit_text = normalized_text or payload.scanned_text
+    full_text_hash = _hash_text(payload.scanned_text or normalized_text)
     return [
         AuditLog(
             request_id=payload.request_id,
@@ -124,8 +126,8 @@ def _logs_from_payload(payload: AuditPayload) -> list[AuditLog]:
             rule_level=result.level,
             scanner_type=result.scanner_type,
             matched_snippet=result.matched_text,
-            context_snippet=_context_snippet(payload.scanned_text, result.matched_text),
-            desensitized_snippet=_context_snippet(payload.desensitized_text, result.matched_text) if payload.desensitized_text else "",
+            context_snippet=_context_snippet(audit_text, result, replace_match=False),
+            desensitized_snippet=_context_snippet(payload.desensitized_text, result) if payload.desensitized_text else "",
             full_text_hash=full_text_hash,
             action_taken=payload.action_taken,
         )
@@ -168,17 +170,37 @@ def _normalized_text(scan_result: AggregatedScanResult | ScannerResult) -> str:
     return ""
 
 
-def _context_snippet(text: str, matched_text: str) -> str:
+def _context_snippet(text: str, result: ScannerResult, replace_match: bool = False) -> str:
     if not text:
         return ""
-    if not matched_text:
-        return text[: AUDIT_CONTEXT_CHARS * 2]
-    index = text.find(matched_text)
-    if index < 0:
-        return text[: AUDIT_CONTEXT_CHARS * 2]
-    start = max(0, index - AUDIT_CONTEXT_CHARS)
-    end = min(len(text), index + len(matched_text) + AUDIT_CONTEXT_CHARS)
-    return text[start:end]
+    start, end = _bounded_position(text, result.position)
+    matched_text = result.matched_text
+    replacement = matched_text if replace_match else ""
+    if start < end:
+        return _window(text, start, end, replacement)
+    if matched_text:
+        index = text.find(matched_text)
+        if index >= 0:
+            return _window(text, index, index + len(matched_text))
+    return text[: AUDIT_CONTEXT_CHARS * 2]
+
+
+def _bounded_position(text: str, position: tuple[int, int]) -> tuple[int, int]:
+    start, end = position
+    if start < 0 or end <= start or start >= len(text):
+        return 0, 0
+    return start, min(end, len(text))
+
+
+def _window(text: str, start: int, end: int, replacement: str = "") -> str:
+    window_start = max(0, start - AUDIT_CONTEXT_CHARS)
+    window_end = min(len(text), end + AUDIT_CONTEXT_CHARS)
+    snippet = text[window_start:window_end]
+    if not replacement:
+        return snippet
+    relative_start = start - window_start
+    relative_end = end - window_start
+    return f"{snippet[:relative_start]}{replacement}{snippet[relative_end:]}"
 
 
 def _hash_text(text: str) -> str:
