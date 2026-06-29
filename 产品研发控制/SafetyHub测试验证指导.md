@@ -1,7 +1,7 @@
 # LLM-SafetyHub 测试验证指导
 
 > 本文档定义 SafetyHub 在 Windows、Linux、Docker 和真实上游联调场景下的测试方法、注意事项和验收标准。  
-> 当前重点覆盖阶段 1 透传中继 + 健康检查、阶段 2 检测/拦截/请求侧手机号脱敏/伪装回复/规则启停/规则热加载链路、阶段 3 Chat 非流式/流式归档、训练数据沉淀、文生图元数据归档、图片本体异步归档、图片资产状态 API、审计写入、最近对话观测 API、R1~R9 schema 预留、阶段 4 管理后台、阶段 5 APIKey 管理、K-Sync 默认、加密存储、APIKey 有效性校验、单条/CSV 批量替换上游 Key、阶段 6 KeyProvider 抽象与 Provider 创建/吊销，以及阶段 6A 高并发治理、数据治理覆盖分析和内网离线部署数据库保留策略。模型权限、token 额度和资源能力权限由中转站验证。阶段 7 及之后暂不开发；当前测试重点收敛到阶段 6A 单实例 Docker 生产稳定性、高并发治理、数据治理和部署验收，自动续约迁移、Provider 切换演练、审计告警、图片资产预览下载页面和存储治理仅保留为长期规划。
+> 当前重点覆盖阶段 1 透传中继 + 健康检查、阶段 2 检测/拦截/请求侧手机号脱敏/伪装回复/规则启停/规则热加载链路、阶段 3 Chat 非流式/流式归档、训练数据沉淀、文生图元数据归档、图片本体异步归档、图片资产状态 API、审计写入、最近对话观测 API、R1~R9 schema 预留、阶段 4 管理后台、阶段 5 APIKey 管理、K-Sync 默认、加密存储、APIKey 有效性校验、单条/CSV 批量替换上游 Key、阶段 6 KeyProvider 抽象与 Provider 创建/吊销、阶段 6A 高并发治理、数据治理覆盖分析和内网离线部署数据库保留策略，以及阶段 6B 报表中心。模型权限、token 额度和资源能力权限由中转站验证。阶段 7 及之后暂不开发；当前测试重点收敛到阶段 6A/6B 单实例 Docker 生产稳定性、高并发治理、数据治理、报表生成和部署验收，自动续约迁移、Provider 切换演练、图片资产预览下载页面和存储治理仅保留为长期规划。
 
 ---
 
@@ -59,7 +59,7 @@ cd <SafetyHub项目根目录>
 最近一次本地复核：96 passed, 2 failed
 ```
 
-当前已知提示：`datetime.utcnow()` 弃用警告已修复，ORM 时间字段统一使用 timezone-aware UTC。当前生产代码已继续演进，固定通过数不再作为唯一验收口径；最近专项验证覆盖训练样本、上线观测、数据治理和中继链路，命令为 `.venv/bin/python -m pytest tests/test_admin_stage4.py tests/test_observations.py tests/test_data_governance.py tests/test_relay.py -q`，结果 `32 passed`。生产上线验收仍应以当前环境复跑、专项测试、Docker/真实上游联调和压测结果为准。
+当前已知提示：`datetime.utcnow()` 弃用警告已修复，ORM 时间字段统一使用 timezone-aware UTC。当前生产代码已继续演进，固定通过数不再作为唯一验收口径；最近专项验证覆盖报表生成、模型建表、并发限制和中继链路，命令为 `.pdf-demo-venv/bin/python -m pytest tests/test_reports.py tests/test_models.py tests/test_concurrency_limit.py tests/test_relay.py -q`，结果 `40 passed`。生产上线验收仍应以当前环境复跑、专项测试、Docker/真实上游联调和压测结果为准。
 
 ### 3.4 分模块测试
 
@@ -122,6 +122,7 @@ chmod +x 交付运行手册/*.sh
 ./交付运行手册/verify_relay.sh
 ./交付运行手册/verify_venv.sh
 .venv/bin/python -m pytest tests/test_data_governance.py
+.venv/bin/python -m pytest tests/test_reports.py tests/test_models.py tests/test_concurrency_limit.py tests/test_relay.py -q
 ```
 
 `tests/test_data_governance.py` 用于验证当前覆盖分析核心语义：跨模型但同 `user_id + api_key_id` 的短轨迹可被最长轨迹覆盖，不同 user/key 不串组。

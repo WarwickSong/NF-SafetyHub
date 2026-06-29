@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -101,6 +101,61 @@ class ImageAsset(Base):
     error: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class GeneratedReport(Base):
+    __tablename__ = "generated_reports"
+    __table_args__ = (UniqueConstraint("report_type", "period_start", "period_end", name="uq_generated_report_period"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    report_type: Mapped[str] = mapped_column(String(16), index=True)
+    period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    timezone: Mapped[str] = mapped_column(String(64), default="Asia/Shanghai")
+    status: Mapped[str] = mapped_column(String(32), index=True, default="pending")
+    generation_mode: Mapped[str] = mapped_column(String(32), index=True, default="manual")
+    include_sensitive: Mapped[bool] = mapped_column(Boolean, default=False)
+    pdf_path: Mapped[str] = mapped_column(Text, default="")
+    xlsx_path: Mapped[str] = mapped_column(Text, default="")
+    csv_path: Mapped[str] = mapped_column(Text, default="")
+    pdf_sha256: Mapped[str] = mapped_column(String(64), default="")
+    xlsx_sha256: Mapped[str] = mapped_column(String(64), default="")
+    csv_sha256: Mapped[str] = mapped_column(String(64), default="")
+    summary_json: Mapped[str] = mapped_column(Text, default="{}")
+    runtime_summary_json: Mapped[str] = mapped_column(Text, default="{}")
+    error_message: Mapped[str] = mapped_column(Text, default="")
+    generated_by: Mapped[str] = mapped_column(String(128), default="")
+    generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
+class RuntimeSample(Base):
+    __tablename__ = "runtime_samples"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    sampled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    worker_pid: Mapped[int] = mapped_column(Integer, default=0)
+    health_status: Mapped[str] = mapped_column(String(32), index=True, default="healthy")
+    cpu_percent: Mapped[float] = mapped_column(Float, default=0.0)
+    memory_percent: Mapped[float] = mapped_column(Float, default=0.0)
+    data_disk_total: Mapped[int] = mapped_column(BigInteger, default=0)
+    data_disk_used: Mapped[int] = mapped_column(BigInteger, default=0)
+    data_disk_free: Mapped[int] = mapped_column(BigInteger, default=0)
+    system_disk_total: Mapped[int] = mapped_column(BigInteger, default=0)
+    system_disk_used: Mapped[int] = mapped_column(BigInteger, default=0)
+    system_disk_free: Mapped[int] = mapped_column(BigInteger, default=0)
+    v1_inflight: Mapped[int] = mapped_column(Integer, default=0)
+    v1_queued: Mapped[int] = mapped_column(Integer, default=0)
+    v1_rejected_total: Mapped[int] = mapped_column(Integer, default=0)
+    v1_timeout_total: Mapped[int] = mapped_column(Integer, default=0)
+    archive_queue_size: Mapped[int] = mapped_column(Integer, default=0)
+    archive_processed_total: Mapped[int] = mapped_column(Integer, default=0)
+    archive_dropped_total: Mapped[int] = mapped_column(Integer, default=0)
+    upstream_error_total: Mapped[int] = mapped_column(Integer, default=0)
+    raw_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
 
 
 class ApiKeyRecord(Base):

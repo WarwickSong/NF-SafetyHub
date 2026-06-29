@@ -21,7 +21,7 @@ class RegexScanner(BaseScanner):
     async def scan(self, text: str) -> list[ScannerResult]:
         results: list[ScannerResult] = []
         for pattern, rule in self._compiled:
-            match = pattern.search(text)
+            match = self._last_match(pattern, text)
             if not match:
                 continue
             results.append(self._build_result(rule, match))
@@ -53,6 +53,9 @@ class RegexScanner(BaseScanner):
             except (KeyError, re.error):
                 continue
         return compiled
+
+    def _last_match(self, pattern: re.Pattern[str], text: str) -> re.Match[str] | None:
+        return next(reversed(list(pattern.finditer(text))), None)
 
     def _build_result(self, rule: dict, match: re.Match[str]) -> ScannerResult:
         return ScannerResult(

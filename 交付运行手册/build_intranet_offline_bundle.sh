@@ -30,6 +30,7 @@ docker save "${SAFETYHUB_IMAGE_NAME}" postgres:16-alpine nginx:1.27-alpine -o "$
 tar \
   --exclude='./.git' \
   --exclude='./.venv' \
+  --exclude='./.pdf-demo-venv' \
   --exclude='./.env' \
   --exclude='./data' \
   --exclude='./__pycache__' \
@@ -81,9 +82,6 @@ chmod +x "${BUNDLE_DIR}/install.sh" "${APP_DIR}/交付运行手册/deploy_intran
 
 if command -v pigz >/dev/null 2>&1; then
   tar -C "${OUTPUT_ROOT}" -cf - "${BUNDLE_NAME}" | pigz > "${OUTPUT_ROOT}/${BUNDLE_NAME}.tar.gz"
-elif command -v zstd >/dev/null 2>&1; then
-  tar -C "${OUTPUT_ROOT}" -cf - "${BUNDLE_NAME}" | zstd -T0 -o "${OUTPUT_ROOT}/${BUNDLE_NAME}.tar.zst"
-  echo "note: compressed with zstd, output is .tar.zst (not .tar.gz)"
 else
   tar -C "${OUTPUT_ROOT}" -czf "${OUTPUT_ROOT}/${BUNDLE_NAME}.tar.gz" "${BUNDLE_NAME}"
 fi

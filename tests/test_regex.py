@@ -30,6 +30,17 @@ async def test_regex_scanner_desensitizes_international_phone_number():
 
 
 @pytest.mark.asyncio
+async def test_regex_scanner_keeps_last_match_for_repeated_rule_hits():
+    scanner = RegexScanner(CONFIG_PATH)
+
+    results = await scanner.scan("旧电话 13812345678，新电话 13912345678")
+
+    phone_result = next(result for result in results if result.rule_id == "RG-PHONE-CN")
+    assert phone_result.position == (20, 31)
+    assert phone_result.matched_text == "13*******78"
+
+
+@pytest.mark.asyncio
 async def test_regex_scanner_keeps_expansion_email_rule_disabled_by_default():
     scanner = RegexScanner(CONFIG_PATH)
 

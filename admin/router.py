@@ -7,6 +7,7 @@ from typing import Any
 
 import yaml
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi.responses import FileResponse
 
 from admin.schemas import (
     AdminLoginRequest,
@@ -45,6 +46,10 @@ from admin.schemas import (
     ObservationListResponse,
     Pagination,
     PlaceholderResponse,
+    ReportGenerateRequest,
+    ReportItem,
+    ReportListResponse,
+    ReportMutationResponse,
     RuleItem,
     RuleListResponse,
     RuleMutationResponse,
@@ -66,6 +71,7 @@ from storage.database import get_session_factory
 from storage.data_governance import CoverageAnalysisConfig, DataGovernanceService
 from storage.image_assets import ImageAssetReader
 from storage.models import AdminOperation, ApiKeyRecord, AuditLog, ImageAsset, TrainingConversation
+from storage.reports import period_from_values
 from storage.runtime_settings import RuntimeSettingsService
 from storage.training import TrainingConversationQuery, TrainingConversationReader
 
@@ -77,7 +83,7 @@ async def login(request: Request, response: Response, payload: AdminLoginRequest
     active_settings = getattr(request.app.state, "settings", settings)
     if not validate_admin_login(payload.username, payload.password, active_settings):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin credentials")
-    set_admin_session_cookie(response, payload.username, active_settings)
+    set_admin_session_cookie(response, payload.username, active_settings, secure=request.url.scheme == "https")
     return AdminLoginResponse(status="ok", message="登录成功")
 
 
@@ -429,6 +435,51 @@ async def runtime_status(request: Request):
     )
 
 
+@router.get("/reports", response_model=ReportListResponse)
+async def list_reports(
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    report_type: str | None = Query(default=None, pattern="^(daily|weekly|monthly)$"),
+    status_filter: str | None = Query(default=None, alias="status"),
+):
+    reports, total = await _report_service(request).list_reports(report_type=report_type, status=status_filter, limit=limit, offset=offset)
+    return ReportListResponse(items=[_report_to_item(item) for item in reports], pagination=Pagination(total=total, limit=limit, offset=offset))
+
+
+@router.post("/reports/generate", response_model=ReportMutationResponse)
+async def generate_report(request: Request, payload: ReportGenerateRequest):
+    try:
+        period = period_from_values(payload.report_type, payload.period)
+        report = await _report_service(request).generate(period, mode="manual", include_sensitive=payload.include_sensitive, generated_by=getattr(request.state, "admin_user", "admin"))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"report generation failed: {exc}") from exc
+    await _write_admin_operation(request, "report.generate", "report", str(report.id))
+    return ReportMutationResponse(status="ok", item=_report_to_item(report))
+
+
+@router.post("/reports/runtime-samples", response_model=PlaceholderResponse)
+async def sample_report_runtime(request: Request):
+    await _report_service(request).sample_runtime()
+    return PlaceholderResponse(status="ok", message="运行状态采样已写入")
+
+
+@router.get("/reports/{report_id}/download")
+async def download_report(request: Request, report_id: int, format: str = Query(default="pdf", pattern="^(pdf|xlsx|csv)$")):
+    report = await _report_service(request).get_report(report_id)
+    if report is None or report.status != "succeeded":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="report not found")
+    relative_path = {"pdf": report.pdf_path, "xlsx": report.xlsx_path, "csv": report.csv_path}.get(format, "")
+    if not relative_path:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="report file not found")
+    path = _report_service(request).resolve_file(relative_path)
+    if not path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="report file missing")
+    return FileResponse(path, filename=path.name)
+
+
 @router.get("/api-keys", response_model=ApiKeyListResponse)
 async def list_api_keys(
     request: Request,
@@ -679,6 +730,13 @@ def _session_factory(request: Request):
     return getattr(request.app.state, "session_factory", None) or get_session_factory()
 
 
+def _report_service(request: Request):
+    service = getattr(request.app.state, "report_service", None)
+    if service is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="report service unavailable")
+    return service
+
+
 async def _write_admin_operation(request: Request, operation: str, resource_type: str, resource_id: str) -> None:
     try:
         await _admin_operation_writer(request).write(
@@ -742,6 +800,27 @@ def _audit_to_summary(audit: AuditLog) -> AuditSummary:
         scanner_type=audit.scanner_type,
         action_taken=audit.action_taken,
         created_at=audit.created_at,
+    )
+
+
+def _report_to_item(report) -> ReportItem:
+    return ReportItem(
+        id=report.id,
+        report_type=report.report_type,
+        period_start=report.period_start,
+        period_end=report.period_end,
+        timezone=report.timezone,
+        status=report.status,
+        generation_mode=report.generation_mode,
+        include_sensitive=report.include_sensitive,
+        summary=_parse_json(report.summary_json, {}),
+        runtime_summary=_parse_json(report.runtime_summary_json, {}),
+        error_message=report.error_message,
+        generated_by=report.generated_by,
+        generated_at=report.generated_at,
+        expires_at=report.expires_at,
+        created_at=report.created_at,
+        files={"pdf": bool(report.pdf_path), "xlsx": bool(report.xlsx_path), "csv": bool(report.csv_path)},
     )
 
 

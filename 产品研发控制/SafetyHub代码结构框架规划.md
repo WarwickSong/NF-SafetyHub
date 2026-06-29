@@ -6,7 +6,7 @@
 
 ## 一、项目目录结构
 
-当前代码结构如下；阶段 1~6 核心能力已落地，KeyProvider 抽象、Provider 实现、APIKey 管理、文生图图片资产归档、训练数据沉淀、数据治理后台和内网 Docker 离线部署数据库保留策略已进入当前结构。当前开发范围收敛到阶段 6A 单实例 Docker 生产稳定性、高并发治理与数据治理交付；阶段 7 及之后暂不开发，告警、图片资产治理增强、文件安全运行模块仅保留规划，不作为当前上线阻塞项。
+当前代码结构如下；阶段 1~6B 核心能力已落地，KeyProvider 抽象、Provider 实现、APIKey 管理、文生图图片资产归档、训练数据沉淀、数据治理后台、报表中心和内网 Docker 离线部署数据库保留策略已进入当前结构。当前开发范围收敛到阶段 6A/6B 生产稳定性、数据治理与报表交付；阶段 7 及之后暂不开发，图片资产治理增强、文件安全运行模块仅保留规划，不作为当前上线阻塞项。
 
 ```text
 NF-SafetyHub/
@@ -51,7 +51,11 @@ NF-SafetyHub/
 │   ├── database.py
 │   ├── image_assets.py
 │   ├── models.py
+│   ├── reports.py
 │   └── training.py
+├── reports/
+│   ├── __init__.py
+│   └── generator.py
 ├── admin/
 │   ├── router.py
 │   ├── schemas.py
@@ -64,6 +68,7 @@ NF-SafetyHub/
 │       ├── index.html
 │       ├── login.html
 │       ├── observations.html
+│       ├── reports.html
 │       ├── rules.html
 │       ├── settings.html
 │       ├── css/style.css
@@ -73,6 +78,8 @@ NF-SafetyHub/
 │   ├── concurrency_limit.py      # 阶段 6A：/v1/* 全局有界并发队列
 │   ├── identity.py
 │   └── request_limit.py          # 阶段 6A：请求体大小限制
+├── runtime/
+│   └── reports.py                # 阶段 6B：运行状态采样、报表生成调度和清理
 ├── notify/
 │   └── __init__.py
 ├── nginx/

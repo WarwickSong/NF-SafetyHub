@@ -18,8 +18,14 @@ set +a
 DATA_ROOT="${SAFETYHUB_DATA_ROOT:-/data/safetyhub}"
 APP_DATA_DIR="${SAFETYHUB_DATA_DIR:-${DATA_ROOT}/app}"
 POSTGRES_DATA_DIR="${SAFETYHUB_POSTGRES_DATA_DIR:-${DATA_ROOT}/postgres}"
+REPORTS_HOST_DIR="${APP_DATA_DIR}/reports"
 
-mkdir -p "${APP_DATA_DIR}" "${POSTGRES_DATA_DIR}"
+mkdir -p "${APP_DATA_DIR}" "${POSTGRES_DATA_DIR}" "${REPORTS_HOST_DIR}"
+
+if [ ! -w "${REPORTS_HOST_DIR}" ]; then
+  echo "reports directory is not writable: ${REPORTS_HOST_DIR}" >&2
+  exit 1
+fi
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "docker is required" >&2
@@ -109,3 +115,4 @@ curl -fsS "http://127.0.0.1:${SAFETYHUB_HTTP_PORT:-80}/health/ready" || true
 echo
 echo "SafetyHub backend: http://127.0.0.1:${SAFETYHUB_HTTP_PORT:-80}/admin/"
 echo "SafetyHub public:  https://${SAFETYHUB_DOMAIN:-llm-safetyhub.nanfu.com}/admin/"
+echo "SafetyHub reports: ${REPORTS_HOST_DIR} -> /app/data/reports"

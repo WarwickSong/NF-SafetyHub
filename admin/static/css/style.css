@@ -639,6 +639,46 @@ body[data-page="dataGovernance"] .governance-coverage-filters .button {
   justify-self: start;
 }
 
+body[data-page="reports"] .reports-card {
+  padding: 18px;
+}
+
+body[data-page="reports"] .reports-card h2 {
+  margin-bottom: 14px;
+}
+
+body[data-page="reports"] .reports-form,
+body[data-page="reports"] .reports-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(140px, 1fr)) auto;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+body[data-page="reports"] .reports-filters {
+  grid-template-columns: repeat(2, minmax(140px, 220px)) auto;
+}
+
+body[data-page="reports"] .reports-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+body[data-page="reports"] .reports-form input,
+body[data-page="reports"] .reports-form select,
+body[data-page="reports"] .reports-filters select {
+  width: 100%;
+}
+
+body[data-page="reports"] .reports-check {
+  display: flex !important;
+  align-items: center;
+  color: var(--text) !important;
+}
+
 body[data-page="dataGovernance"] .governance-field {
   display: grid;
   gap: 8px;

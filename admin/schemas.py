@@ -185,6 +185,41 @@ class RuntimeStatusResponse(BaseModel):
     disk_space: list[DiskSpaceItem]
 
 
+class ReportGenerateRequest(BaseModel):
+    report_type: str = Field(pattern="^(daily|weekly|monthly)$")
+    period: str
+    include_sensitive: bool = False
+
+
+class ReportItem(BaseModel):
+    id: int
+    report_type: str
+    period_start: datetime | None
+    period_end: datetime | None
+    timezone: str
+    status: str
+    generation_mode: str
+    include_sensitive: bool
+    summary: dict[str, Any]
+    runtime_summary: dict[str, Any]
+    error_message: str
+    generated_by: str
+    generated_at: datetime | None
+    expires_at: datetime | None
+    created_at: datetime | None
+    files: dict[str, bool]
+
+
+class ReportListResponse(BaseModel):
+    items: list[ReportItem]
+    pagination: Pagination
+
+
+class ReportMutationResponse(BaseModel):
+    status: str
+    item: ReportItem
+
+
 class ObservationItem(ArchiveDetail):
     pass
 

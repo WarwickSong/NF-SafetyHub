@@ -3,7 +3,7 @@ from sqlalchemy import inspect, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from storage.database import POSTGRES_LEGACY_COLUMNS
-from storage.models import ApiKeyRecord, ApprovalChain, ApprovalRequest, Base, ImageAsset, RuntimeSetting, SecurityPolicy
+from storage.models import ApiKeyRecord, ApprovalChain, ApprovalRequest, Base, GeneratedReport, ImageAsset, RuntimeSample, RuntimeSetting, SecurityPolicy
 
 
 @pytest.mark.asyncio
@@ -25,6 +25,8 @@ async def test_stage3_reserved_tables_are_created_with_required_columns():
         "approval_chains",
         "image_assets",
         "runtime_settings",
+        "generated_reports",
+        "runtime_samples",
     }.issubset(table_names)
     assert {
         "provider_name",
@@ -50,6 +52,20 @@ async def test_stage3_reserved_tables_are_created_with_required_columns():
         "completed_at",
     }.issubset(image_asset_columns)
     assert {"key", "value", "description", "updated_by", "created_at", "updated_at"}.issubset(runtime_setting_columns)
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_report_tables_are_created_with_required_columns():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        report_columns = await conn.run_sync(lambda sync_conn: {column["name"] for column in inspect(sync_conn).get_columns("generated_reports")})
+        sample_columns = await conn.run_sync(lambda sync_conn: {column["name"] for column in inspect(sync_conn).get_columns("runtime_samples")})
+
+    assert {"report_type", "period_start", "period_end", "status", "pdf_path", "xlsx_path", "csv_path", "summary_json", "runtime_summary_json", "expires_at"}.issubset(report_columns)
+    assert {"sampled_at", "cpu_percent", "memory_percent", "v1_queued", "archive_queue_size", "data_disk_free", "raw_json"}.issubset(sample_columns)
 
     await engine.dispose()
 

@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     system_disk_monitor_path: Path = Path("/")
     system_disk_monitor_container_path: Path = Path("/mnt/system-disk")
     data_disk_monitor_path: Path = Path("data")
+    reports_enabled: bool = True
+    reports_dir: Path = Path("data/reports")
+    reports_retention_days: int = 90
+    reports_runtime_sample_interval_minutes: int = 5
+    reports_daily_generate_time: str = "02:00"
+    reports_weekly_generate_time: str = "03:00"
+    reports_monthly_generate_time: str = "04:00"
+    reports_generation_timeout_seconds: int = 600
     image_asset_dir: Path = Path("data/image_assets")
     image_asset_max_size_mb: int = 20
     image_asset_download_timeout_seconds: int = 10

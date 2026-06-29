@@ -58,7 +58,7 @@ class KeywordScanner(BaseScanner):
             return (0, len(text)) if text == keyword else None
         if match_mode == "prefix":
             return (0, len(keyword)) if text.startswith(keyword) else None
-        index = text.find(keyword)
+        index = text.rfind(keyword)
         if index == -1:
             return None
         return index, index + len(keyword)

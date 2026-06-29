@@ -74,13 +74,15 @@ def clear_admin_session_cookie(response: Response) -> None:
     response.delete_cookie(ADMIN_SESSION_COOKIE, path="/admin")
 
 
-def set_admin_session_cookie(response: Response, admin_user: str, active_settings: Settings) -> None:
+def set_admin_session_cookie(
+    response: Response, admin_user: str, active_settings: Settings, *, secure: bool | None = None
+) -> None:
     response.set_cookie(
         ADMIN_SESSION_COOKIE,
         create_admin_session_cookie(admin_user, active_settings),
         max_age=ADMIN_SESSION_MAX_AGE,
         httponly=True,
-        secure=active_settings.is_production,
+        secure=secure if secure is not None else active_settings.is_production,
         samesite="lax",
         path="/admin",
     )

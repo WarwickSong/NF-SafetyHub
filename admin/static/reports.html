@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>报表中心 - SafetyHub</title>
+  <link rel="stylesheet" href="/admin/css/style.css">
+</head>
+<body data-page="reports">
+  <nav class="sidebar">
+    <div class="brand">SafetyHub</div>
+    <a href="/admin/index.html">仪表盘</a>
+    <a href="/admin/archives.html">训练样本</a>
+    <a href="/admin/blocks.html">拦截审计</a>
+    <a href="/admin/observations.html">上线观测</a>
+    <a href="/admin/rules.html">规则</a>
+    <a href="/admin/api_keys.html">APIKey</a>
+    <a href="/admin/approvals.html">审批</a>
+    <a href="/admin/data_governance.html">数据治理</a>
+    <a class="active" href="/admin/reports.html">报表中心</a>
+    <a href="/admin/settings.html">设置</a>
+  </nav>
+  <main class="content">
+    <header class="topbar"><div><h1>报表中心</h1><p>日报、周报、月报按周期生成 PDF、XLSX 和 CSV 文件，下载时不实时重算。</p></div><button class="button" data-refresh>刷新</button></header>
+    <section class="card reports-card">
+      <h2>手动生成</h2>
+      <div class="reports-form">
+        <label><span>报表类型</span><select id="reportType"><option value="daily">日报</option><option value="weekly">周报</option><option value="monthly">月报</option></select></label>
+        <label><span>周期</span><input id="reportPeriod" type="date"><small>周报填写该周任意日期会按 ISO 周生成；月报填写该月任意日期会按月份生成。</small></label>
+        <label class="reports-check"><input id="reportIncludeSensitive" type="checkbox"> 包含敏感明细</label>
+        <button class="button" id="generateReport">生成并覆盖</button>
+        <button class="button secondary" id="sampleRuntime">立即采样</button>
+      </div>
+      <pre id="reportGenerateResult">定时任务会自动生成上一自然日、上一周、上一月报表。</pre>
+    </section>
+    <section class="card reports-card">
+      <h2>报表列表</h2>
+      <div class="reports-filters">
+        <select id="reportFilterType"><option value="">全部类型</option><option value="daily">日报</option><option value="weekly">周报</option><option value="monthly">月报</option></select>
+        <select id="reportFilterStatus"><option value="">全部状态</option><option value="succeeded">成功</option><option value="running">生成中</option><option value="failed">失败</option></select>
+        <button class="button secondary" id="applyReportFilters">筛选</button>
+      </div>
+      <table>
+        <thead><tr><th>ID</th><th>类型</th><th>周期</th><th>状态</th><th>摘要</th><th>生成时间</th><th>下载</th></tr></thead>
+        <tbody id="reportsTable"><tr><td colspan="7">加载中...</td></tr></tbody>
+      </table>
+    </section>
+  </main>
+  <script src="/admin/js/app.js"></script>
+</body>
+</html>

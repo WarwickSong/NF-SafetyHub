@@ -64,6 +64,27 @@ async def test_scanner_orchestrator_degrades_when_scanner_fails():
     assert result.block_result.rule_id == "KW-CONFIDENTIAL-1"
 
 
+@pytest.mark.asyncio
+async def test_keyword_scanner_keeps_last_contains_match(tmp_path):
+    config_path = tmp_path / "rules.yaml"
+    config_path.write_text(
+        "keyword_rules:\n"
+        "  - id: KW-TEST\n"
+        "    name: 测试关键词\n"
+        "    keywords: ['重复']\n"
+        "    level: block\n"
+        "    match_mode: contains\n"
+        "regex_rules: []\n",
+        encoding="utf-8",
+    )
+    scanner = KeywordScanner(config_path)
+
+    results = await scanner.scan("旧证据重复，新证据重复")
+
+    assert len(results) == 1
+    assert results[0].position == (9, 11)
+
+
 def test_normalize_text_decodes_url_and_removes_zero_width_chars():
     normalized = normalize_text("%E4%BA%A7%E5%93%81%E2%80%8B%E8%B7%AF%E7%BA%BF%E5%9B%BE")
 

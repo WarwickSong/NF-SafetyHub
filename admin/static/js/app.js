@@ -46,6 +46,7 @@ async function loadPage(page) {
   if (page === "rules") return loadRules();
   if (page === "apiKeys") return setupApiKeysPage();
   if (page === "dataGovernance") return loadDataGovernance();
+  if (page === "reports") return setupReportsPage();
   if (page === "settings") return loadSettings();
   if (page === "placeholder") return loadPlaceholder();
 }
@@ -847,6 +848,115 @@ async function loadSettings() {
   document.getElementById("adminHealth").textContent = SafetyHub.json(health);
   const ops = await SafetyHub.api("/admin/api/admin-ops?limit=50");
   document.getElementById("adminOpsTable").innerHTML = ops.items.map((item) => `<tr><td>${item.id}</td><td>${item.admin_user || "-"}</td><td>${item.operation}</td><td>${item.resource_type}:${item.resource_id}</td><td>${SafetyHub.time(item.created_at)}</td></tr>`).join("");
+}
+
+async function setupReportsPage() {
+  bindReportsControls();
+  initializeReportPeriod();
+  await loadReports();
+}
+
+function bindReportsControls() {
+  const generateButton = document.getElementById("generateReport");
+  if (generateButton && generateButton.dataset.bound !== "true") {
+    generateButton.dataset.bound = "true";
+    generateButton.addEventListener("click", generateReport);
+  }
+  const sampleButton = document.getElementById("sampleRuntime");
+  if (sampleButton && sampleButton.dataset.bound !== "true") {
+    sampleButton.dataset.bound = "true";
+    sampleButton.addEventListener("click", sampleRuntime);
+  }
+  const filterButton = document.getElementById("applyReportFilters");
+  if (filterButton && filterButton.dataset.bound !== "true") {
+    filterButton.dataset.bound = "true";
+    filterButton.addEventListener("click", loadReports);
+  }
+  const typeSelect = document.getElementById("reportType");
+  if (typeSelect && typeSelect.dataset.bound !== "true") {
+    typeSelect.dataset.bound = "true";
+    typeSelect.addEventListener("change", initializeReportPeriod);
+  }
+}
+
+function initializeReportPeriod() {
+  const input = document.getElementById("reportPeriod");
+  if (!input || input.value) return;
+  const date = new Date();
+  date.setDate(date.getDate() - 1);
+  input.value = date.toISOString().slice(0, 10);
+}
+
+async function loadReports() {
+  const params = new URLSearchParams();
+  appendParam(params, "report_type", inputValue("reportFilterType"));
+  appendParam(params, "status", inputValue("reportFilterStatus"));
+  const payload = await SafetyHub.api(`/admin/api/reports?${params}`);
+  const table = document.getElementById("reportsTable");
+  if (!table) return;
+  table.innerHTML = payload.items.length ? payload.items.map(renderReportRow).join("") : `<tr><td colspan="7">暂无报表。</td></tr>`;
+}
+
+function renderReportRow(item) {
+  const summary = item.summary || {};
+  const files = item.files || {};
+  const period = `${SafetyHub.time(item.period_start)} 至 ${SafetyHub.time(item.period_end)}`;
+  const downloads = ["pdf", "xlsx", "csv"].filter((format) => files[format]).map((format) => `<a class="button small secondary" href="/admin/api/reports/${item.id}/download?format=${format}">${format.toUpperCase()}</a>`).join(" ") || "-";
+  return `<tr><td>${item.id}</td><td>${reportTypeLabel(item.report_type)}</td><td>${period}</td><td><span class="tag ${item.status === "failed" ? "danger" : ""}">${item.status}</span></td><td>请求 ${SafetyHub.text(summary.total_requests)} / 事件 ${SafetyHub.text(summary.security_events)} / 拦截 ${SafetyHub.text(summary.blocked)}</td><td>${SafetyHub.time(item.generated_at || item.created_at)}</td><td>${downloads}</td></tr>`;
+}
+
+async function generateReport() {
+  const result = document.getElementById("reportGenerateResult");
+  const payload = reportGeneratePayload();
+  if (!payload.period) {
+    result.textContent = "请选择周期。";
+    return;
+  }
+  result.textContent = "正在生成报表...";
+  try {
+    const response = await SafetyHub.api("/admin/api/reports/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    result.textContent = `生成完成：报表 #${response.item.id}`;
+    await loadReports();
+  } catch (error) {
+    result.textContent = `生成失败：${error.message}`;
+  }
+}
+
+function reportGeneratePayload() {
+  const reportType = inputValue("reportType") || "daily";
+  const dateValue = inputValue("reportPeriod");
+  let period = dateValue;
+  if (reportType === "weekly" && dateValue) {
+    period = isoWeekValue(dateValue);
+  }
+  if (reportType === "monthly" && dateValue) {
+    period = dateValue.slice(0, 7);
+  }
+  return { report_type: reportType, period, include_sensitive: document.getElementById("reportIncludeSensitive")?.checked === true };
+}
+
+function isoWeekValue(dateValue) {
+  const date = new Date(`${dateValue}T00:00:00Z`);
+  const day = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  const week = Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
+  return `${date.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+
+async function sampleRuntime() {
+  const result = document.getElementById("reportGenerateResult");
+  result.textContent = "正在写入运行状态采样...";
+  await SafetyHub.api("/admin/api/reports/runtime-samples", { method: "POST" });
+  result.textContent = "运行状态采样已写入。";
+}
+
+function reportTypeLabel(value) {
+  return { daily: "日报", weekly: "周报", monthly: "月报" }[value] || value;
 }
 
 async function loadAdminSettings() {

@@ -19,6 +19,7 @@ from proxy.relay import router as relay_router
 from proxy.upstream_router import get_default_upstream_router
 from runtime.admin_cache import AdminStatsCache
 from runtime.archive_queue import ArchiveQueue
+from runtime.reports import ReportScheduler, ReportService
 from runtime.upstream_client import create_upstream_client
 from storage.audit import AuditWriter
 from storage.database import close_db, get_session_factory, init_db
@@ -62,11 +63,15 @@ async def lifespan(app: FastAPI):
     app.state.runtime_settings_service.start()
     app.state.archive_queue = ArchiveQueue(app.state.audit_writer, app.state.training_writer, runtime_settings=app.state.runtime_settings_service)
     app.state.archive_queue.start()
+    app.state.report_service = ReportService(app.state.session_factory, archive_queue=app.state.archive_queue)
+    app.state.report_scheduler = ReportScheduler(app.state.report_service)
+    app.state.report_scheduler.start()
     app.state.admin_stats_cache = AdminStatsCache()
     app.state.rules_reload_task = reload_task
     try:
         yield
     finally:
+        await app.state.report_scheduler.stop()
         await app.state.archive_queue.stop()
         await app.state.runtime_settings_service.stop()
         await app.state.upstream_client.aclose()
