@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     rules_config_path: Path = Path("engine/rules_config.yaml")
     rules_reload_interval: int = 5
     scanner_order: list[str] = Field(default_factory=lambda: ["keyword", "regex"])
+    scanner_fail_open: bool = False
 
     db_url: str = "sqlite+aiosqlite:///./data/safetyhub.db"
     archive_retention_days: int = 180

@@ -178,6 +178,7 @@ make docker-down  # Docker 停止
 | `SAFETYHUB_DATA_KEY` | APIKey 加密密钥环境变量，生产环境必填 | 空 |
 | `ALLOW_EMPTY_API_KEYS_PASSTHROUGH` | APIKey 表为空时是否允许历史透传，生产应关闭 | `true` |
 | `RULES_CONFIG_PATH` | 规则配置文件路径 | `engine/rules_config.yaml` |
+| `SCANNER_FAIL_OPEN` | 扫描器异常时是否降级放行；生产建议保持关闭 | `false` |
 | `KEY_PROVIDER_TYPE` | KeyProvider 类型：`passthrough` / `static` / `oneapi_nanfu_yxai` | `passthrough` |
 | `REQUEST_MAX_BODY_MB` | 请求体大小限制 | `20` |
 | `V1_MAX_INFLIGHT` | 每 worker `/v1/*` 最大在途请求数 | `150` |
@@ -217,12 +218,13 @@ make docker-down  # Docker 停止
 python -m pytest
 ```
 
-历史全量测试基线为 `94 passed`；当前生产代码已继续演进，最近一次本地复核为 `96 passed, 2 failed`，失败集中在 `tests/test_admin_auth.py` 的后台认证测试夹具未初始化 `message_archives` 表。该问题属于测试夹具与当前生产代码演进不同步，不影响生产应用生命周期内的数据库初始化；生产上线判断应结合专项测试、Docker/真实上游联调和压测验收。
+历史固定通过数不再作为上线依据；生产上线判断以当前环境复跑、专项测试、Docker/真实上游联调和压测验收为准。数据库初始化会写入 `schema_migrations` 基线版本，用于后续版本化迁移追踪。
 
 常用专项测试：
 
 ```bash
 pytest tests/test_concurrency_limit.py
+pytest tests/test_request_limit.py tests/test_scanner.py tests/test_models.py
 pytest tests/test_api_keys.py
 pytest tests/test_image_assets.py tests/test_relay_image_assets.py tests/test_admin_image_assets.py
 pytest tests/test_relay.py tests/test_header_policy.py

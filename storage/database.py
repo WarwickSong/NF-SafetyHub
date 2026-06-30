@@ -6,6 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 from config import settings
 from storage.models import Base
 
+SCHEMA_MIGRATIONS_TABLE = "schema_migrations"
+MIGRATIONS = (
+    ("0001_baseline_metadata", "Baseline SQLAlchemy metadata and legacy column compatibility"),
+)
+
 
 def _sqlite_connect_args() -> dict[str, int]:
     if not settings.db_url.startswith("sqlite+aiosqlite:///"):
@@ -27,6 +32,7 @@ async def init_db() -> None:
         await _configure_sqlite(conn)
         await conn.run_sync(Base.metadata.create_all)
         await _ensure_legacy_columns(conn)
+        await _run_schema_migrations(conn)
 
 
 async def close_db() -> None:
@@ -178,6 +184,35 @@ async def _ensure_postgres_legacy_columns(conn) -> None:
     for table_name, columns in POSTGRES_LEGACY_COLUMNS.items():
         for column_name, column_definition in columns.items():
             await conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {column_name} {column_definition}"))
+
+
+async def _run_schema_migrations(conn) -> None:
+    await _ensure_schema_migrations_table(conn)
+    rows = await conn.execute(text(f"SELECT version FROM {SCHEMA_MIGRATIONS_TABLE}"))
+    applied_versions = {row[0] for row in rows.fetchall()}
+    for version, description in MIGRATIONS:
+        if version in applied_versions:
+            continue
+        await conn.execute(
+            text(f"INSERT INTO {SCHEMA_MIGRATIONS_TABLE} (version, description) VALUES (:version, :description)"),
+            {"version": version, "description": description},
+        )
+
+
+async def _ensure_schema_migrations_table(conn) -> None:
+    if settings.db_url.startswith("postgresql+asyncpg://"):
+        timestamp_type = "TIMESTAMP WITH TIME ZONE"
+    else:
+        timestamp_type = "DATETIME"
+    await conn.execute(
+        text(
+            f"CREATE TABLE IF NOT EXISTS {SCHEMA_MIGRATIONS_TABLE} ("
+            "version VARCHAR(64) PRIMARY KEY, "
+            "description TEXT DEFAULT '', "
+            f"applied_at {timestamp_type} DEFAULT CURRENT_TIMESTAMP"
+            ")"
+        )
+    )
 
 
 def _ensure_sqlite_parent_dir() -> None:

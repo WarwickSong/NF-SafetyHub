@@ -10,6 +10,12 @@ def create_test_app(settings: Settings) -> FastAPI:
     app = FastAPI()
     app.include_router(router, prefix="/admin/api")
     app.state.settings = settings
+
+    class FakeTrainingConversationReader:
+        async def recent(self, limit=10):
+            return []
+
+    app.state.training_conversation_reader = FakeTrainingConversationReader()
     return app
 
 

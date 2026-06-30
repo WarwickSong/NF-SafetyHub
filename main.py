@@ -44,7 +44,7 @@ async def periodic_rules_reload(scanner: ScannerOrchestrator, interval_seconds: 
 async def lifespan(app: FastAPI):
     validate_startup_settings(settings)
     await init_db()
-    scanner = ScannerOrchestrator()
+    scanner = ScannerOrchestrator(fail_open=settings.scanner_fail_open)
     scanner.register(KeywordScanner(settings.rules_config_path))
     scanner.register(RegexScanner(settings.rules_config_path))
     reload_task = asyncio.create_task(periodic_rules_reload(scanner, settings.rules_reload_interval))

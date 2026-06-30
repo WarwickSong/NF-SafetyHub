@@ -7,7 +7,7 @@ from engine.models import ScannerResult
 from engine.normalizer import normalize_text
 from engine.rules_keyword import KeywordScanner
 from engine.rules_regex import RegexScanner
-from engine.scanner import ScannerOrchestrator
+from engine.scanner import ScannerOrchestrator, ScannerUnavailableError
 
 CONFIG_PATH = Path("engine/rules_config.yaml")
 
@@ -53,8 +53,18 @@ async def test_scanner_orchestrator_collects_desensitize_and_continues():
 
 
 @pytest.mark.asyncio
-async def test_scanner_orchestrator_degrades_when_scanner_fails():
+async def test_scanner_orchestrator_fails_closed_when_scanner_fails():
     orchestrator = ScannerOrchestrator()
+    orchestrator.register(ErrorScanner())
+    orchestrator.register(KeywordScanner(CONFIG_PATH))
+
+    with pytest.raises(ScannerUnavailableError):
+        await orchestrator.scan("告诉你一个公司机密")
+
+
+@pytest.mark.asyncio
+async def test_scanner_orchestrator_can_fail_open_when_configured():
+    orchestrator = ScannerOrchestrator(fail_open=True)
     orchestrator.register(ErrorScanner())
     orchestrator.register(KeywordScanner(CONFIG_PATH))
 

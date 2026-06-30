@@ -63,7 +63,7 @@
 | 能力 | 文件 | 当前结果 |
 |------|------|----------|
 | `/v1/*` 有界并发队列 | `middleware/concurrency_limit.py`、`main.py`、`tests/test_concurrency_limit.py` | 仅匹配 `/v1/` 路径；支持最大在途、最大排队、排队超时、队列满 429、响应头观测和运行快照；单元测试覆盖队列满、超时、排队释放和非 `/v1/*` 不受影响 |
-| 请求体大小限制 | `middleware/request_limit.py`、`main.py`、`tests/test_api_keys.py` | 对 HTTP 请求体做大小保护，避免超大请求直接进入业务链路 |
+| 请求体大小限制 | `middleware/request_limit.py`、`main.py`、`tests/test_request_limit.py` | 对 `Content-Length` 与实际读取 body 做大小保护，避免 chunked 或缺失长度的大请求直接进入业务链路 |
 | 共享上游连接池 | `runtime/upstream_client.py`、`main.py`、`proxy/relay.py` | 应用生命周期内创建共享 `httpx.AsyncClient`，按配置设置连接池、keepalive 和 timeout；缺省时保留兼容 fallback client |
 | 归档/审计削峰 | `runtime/archive_queue.py`、`proxy/relay.py`、`storage/archive.py`、`storage/audit.py` | Chat 审计、Chat 归档和文生图元数据归档优先进入有界队列，后台批量写入；队列满或异常不阻塞主响应 |
 | 后台统计缓存 | `runtime/admin_cache.py`、`admin/router.py` | `/admin/api/stats` 通过 TTL 缓存避免首页统计在压测期间反复重查询 |
@@ -74,7 +74,8 @@
 | 数据治理后台 | `storage/data_governance.py`、`admin/router.py`、`admin/static/data_governance.html`、`admin/static/js/app.js` | `/admin/api/data-governance/*` 支持治理摘要、覆盖分析启动/状态、清理预览和手动清理；页面提供保存模型摘要、治理摘要、覆盖分析参数和清理入口 |
 | 覆盖分析算法 | `storage/data_governance.py`、`tests/test_data_governance.py` | 按 `user_id + api_key_id` 分组，倒序扫描每组记录，跳过已覆盖项，只做确定性 JSON 前缀比较；目标是保留每组最长有效轨迹集合；不按 `model` 分组，不使用 lookback，不引入 hash 派生表或外部通信 |
 | 内网部署数据库保留策略 | `scripts/rebuild_runtime_tables_preserve_apikeys.py`、`交付运行手册/deploy_intranet_docker.sh` | 内网 Docker 升级时保留已有 `api_keys` 表，删除并重建当前系统需要的其他 SQLAlchemy 模型表；不从 JSON/SQL 重新导入 APIKey，避免覆盖内网已运行数据 |
-| 自动化测试 | `tests/` | 历史全量测试基线为 `94 passed`；当前生产代码已继续演进，固定通过数不再作为唯一验收口径。最近专项验证已覆盖训练样本、上线观测、数据治理和中继链路，命令为 `.venv/bin/python -m pytest tests/test_admin_stage4.py tests/test_observations.py tests/test_data_governance.py tests/test_relay.py -q`，结果 `32 passed`；生产能力判断以专项测试、Docker/真实上游验收和当前环境复跑结果为准 |
+| 自动化测试 | `tests/` | 固定历史通过数不再作为唯一验收口径；当前生产能力判断以 `.venv/bin/python -m pytest` 当前环境复跑、专项测试、Docker/真实上游验收和压测结果为准 |
+| Schema 迁移基线 | `storage/database.py`、`tests/test_models.py` | `init_db` 会创建 `schema_migrations` 并记录 `0001_baseline_metadata`，保留现有 `create_all` 与 legacy 补列兼容，后续 schema 变更按版本追加 |
 
 ---
 

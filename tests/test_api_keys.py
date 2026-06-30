@@ -460,13 +460,14 @@ def test_production_startup_validation_requires_data_key_and_disables_empty_key_
         upstream_url="https://upstream.example.com",
         admin_password="strong-local-password",
         allow_empty_api_keys_passthrough=True,
+        data_encryption_key_env="MISSING_SAFETYHUB_DATA_KEY_FOR_TEST",
     )
 
     with pytest.raises(RuntimeError) as exc_info:
         validate_startup_settings(production_settings)
 
     message = str(exc_info.value)
-    assert "SAFETYHUB_DATA_KEY" in message
+    assert "MISSING_SAFETYHUB_DATA_KEY_FOR_TEST" in message
     assert "ALLOW_EMPTY_API_KEYS_PASSTHROUGH=false" in message
 
 

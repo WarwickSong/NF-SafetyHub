@@ -5,10 +5,15 @@ from engine.models import AggregatedScanResult, ScannerResult
 from engine.normalizer import TextNormalizer
 
 
+class ScannerUnavailableError(RuntimeError):
+    pass
+
+
 class ScannerOrchestrator:
-    def __init__(self, normalizer: TextNormalizer | None = None):
+    def __init__(self, normalizer: TextNormalizer | None = None, fail_open: bool = False):
         self._scanners: list[BaseScanner] = []
         self._normalizer = normalizer or TextNormalizer()
+        self._fail_open = fail_open
 
     def register(self, scanner: BaseScanner) -> None:
         self._scanners.append(scanner)
@@ -28,6 +33,8 @@ class ScannerOrchestrator:
             try:
                 results = await scanner.scan(normalized_text)
             except Exception:
+                if not self._fail_open:
+                    raise ScannerUnavailableError(f"scanner {scanner.name} failed")
                 continue
             all_results.extend(results)
             if any(result.blocked for result in results):

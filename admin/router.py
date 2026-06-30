@@ -83,7 +83,7 @@ async def login(request: Request, response: Response, payload: AdminLoginRequest
     active_settings = getattr(request.app.state, "settings", settings)
     if not validate_admin_login(payload.username, payload.password, active_settings):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin credentials")
-    set_admin_session_cookie(response, payload.username, active_settings, secure=request.url.scheme == "https")
+    set_admin_session_cookie(response, payload.username, active_settings, secure=True if request.url.scheme == "https" else None)
     return AdminLoginResponse(status="ok", message="登录成功")
 
 

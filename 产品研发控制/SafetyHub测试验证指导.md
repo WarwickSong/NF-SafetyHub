@@ -52,14 +52,7 @@ cd <SafetyHub项目根目录>
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-当前参考基线：
-
-```text
-历史基线：94 passed
-最近一次本地复核：96 passed, 2 failed
-```
-
-当前已知提示：`datetime.utcnow()` 弃用警告已修复，ORM 时间字段统一使用 timezone-aware UTC。当前生产代码已继续演进，固定通过数不再作为唯一验收口径；最近专项验证覆盖报表生成、模型建表、并发限制和中继链路，命令为 `.pdf-demo-venv/bin/python -m pytest tests/test_reports.py tests/test_models.py tests/test_concurrency_limit.py tests/test_relay.py -q`，结果 `40 passed`。生产上线验收仍应以当前环境复跑、专项测试、Docker/真实上游联调和压测结果为准。
+当前生产代码持续演进，固定历史通过数不再作为上线依据。生产上线验收应以当前环境复跑、专项测试、Docker/真实上游联调和压测结果为准。
 
 ### 3.4 分模块测试
 
@@ -113,6 +106,12 @@ chmod +x 交付运行手册/*.sh
 
 ```bash
 .venv/bin/python -m pytest
+```
+
+关键专项回归：
+
+```bash
+.venv/bin/python -m pytest tests/test_request_limit.py tests/test_scanner.py tests/test_models.py -q
 ```
 
 ### 4.4 分模块测试

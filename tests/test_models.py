@@ -1,7 +1,8 @@
 import pytest
-from sqlalchemy import inspect, select
+from sqlalchemy import inspect, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from storage import database
 from storage.database import POSTGRES_LEGACY_COLUMNS
 from storage.models import ApiKeyRecord, ApprovalChain, ApprovalRequest, Base, GeneratedReport, ImageAsset, RuntimeSample, RuntimeSetting, SecurityPolicy
 
@@ -52,6 +53,24 @@ async def test_stage3_reserved_tables_are_created_with_required_columns():
         "completed_at",
     }.issubset(image_asset_columns)
     assert {"key", "value", "description", "updated_by", "created_at", "updated_at"}.issubset(runtime_setting_columns)
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_init_db_records_schema_migration_baseline(monkeypatch):
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(database, "engine", engine)
+    monkeypatch.setattr(database, "SessionLocal", session_factory)
+    monkeypatch.setattr("storage.database.settings.db_url", "sqlite+aiosqlite:///:memory:")
+
+    await database.init_db()
+    async with engine.connect() as conn:
+        rows = await conn.execute(text("SELECT version FROM schema_migrations"))
+        versions = {row[0] for row in rows.fetchall()}
+
+    assert "0001_baseline_metadata" in versions
 
     await engine.dispose()
 

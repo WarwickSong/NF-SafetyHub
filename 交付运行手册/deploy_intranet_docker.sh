@@ -22,6 +22,10 @@ REPORTS_HOST_DIR="${APP_DATA_DIR}/reports"
 
 mkdir -p "${APP_DATA_DIR}" "${POSTGRES_DATA_DIR}" "${REPORTS_HOST_DIR}"
 
+if ! chown -R 1000:1000 "${REPORTS_HOST_DIR}" 2>/dev/null; then
+  chmod -R a+rwX "${REPORTS_HOST_DIR}"
+fi
+
 if [ ! -w "${REPORTS_HOST_DIR}" ]; then
   echo "reports directory is not writable: ${REPORTS_HOST_DIR}" >&2
   exit 1
