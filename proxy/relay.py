@@ -76,7 +76,7 @@ async def relay_openai_compatible(request: Request, upstream_path: str):
                 _write_chat_archive(request, original_body, body, _response_archive_body(fake_response), scan_result, "blocked", is_stream, started_at, identity)
                 return fake_response
         if isinstance(body, dict):
-            desensitized_body = desensitize_chat_request_body(body)
+            desensitized_body = await desensitize_chat_request_body(body, scanner)
             was_desensitized = desensitized_body != body
             latest_desensitized_text = extract_latest_text_from_request(path, desensitized_body) if was_desensitized else ""
             body = desensitized_body
@@ -578,37 +578,40 @@ def _infer_capability(path: str) -> str:
 
 PHONE_PATTERNS = (
     re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"),
-    re.compile(r"(?<!\d)\+?[1-9]\d{0,2}[ -]?(?:\d[ -]?){7,14}\d(?!\d)"),
+    re.compile(r"(?<!\d)(?:\+|00)[1-9]\d{0,2}[ -]?(?:\d[ -]?){7,12}\d(?!\d)"),
 )
 BLOCK_SCAN_ROLES = {"user", "tool", "function"}
 DESENSITIZE_ROLES = {"user", "tool", "function"}
 
 
-def desensitize_chat_request_body(body: dict[str, Any]) -> dict[str, Any]:
+async def desensitize_chat_request_body(body: dict[str, Any], scanner: Any | None = None) -> dict[str, Any]:
+    patterns = _resolve_desensitize_patterns(scanner)
+    if not patterns:
+        return deepcopy(body)
     sanitized_body = deepcopy(body)
     messages = sanitized_body.get("messages")
     if isinstance(messages, list):
         for message in messages:
             if not isinstance(message, dict) or message.get("role") not in DESENSITIZE_ROLES:
                 continue
-            message["content"] = desensitize_content(message.get("content"))
+            message["content"] = desensitize_content(message.get("content"), patterns)
     return sanitized_body
 
 
-def desensitize_content(content: Any) -> Any:
+def desensitize_content(content: Any, patterns: tuple[re.Pattern[str], ...]) -> Any:
     if isinstance(content, str):
-        return desensitize_text(content)
+        return desensitize_text(content, patterns)
     if isinstance(content, list):
         sanitized_parts = []
         for item in content:
             if isinstance(item, str):
-                sanitized_parts.append(desensitize_text(item))
+                sanitized_parts.append(desensitize_text(item, patterns))
             elif isinstance(item, dict):
                 sanitized_item = deepcopy(item)
                 if isinstance(sanitized_item.get("text"), str):
-                    sanitized_item["text"] = desensitize_text(sanitized_item["text"])
+                    sanitized_item["text"] = desensitize_text(sanitized_item["text"], patterns)
                 if "content" in sanitized_item:
-                    sanitized_item["content"] = desensitize_content(sanitized_item.get("content"))
+                    sanitized_item["content"] = desensitize_content(sanitized_item.get("content"), patterns)
                 sanitized_parts.append(sanitized_item)
             else:
                 sanitized_parts.append(item)
@@ -616,11 +619,26 @@ def desensitize_content(content: Any) -> Any:
     return content
 
 
-def desensitize_text(text: str) -> str:
+def desensitize_text(text: str, patterns: tuple[re.Pattern[str], ...]) -> str:
     sanitized = text
-    for pattern in PHONE_PATTERNS:
+    for pattern in patterns:
         sanitized = pattern.sub(_mask_phone_match, sanitized)
     return sanitized
+
+
+def _resolve_desensitize_patterns(scanner: Any | None) -> tuple[re.Pattern[str], ...]:
+    """Get desensitize patterns from scanner's enabled rules; fall back to hardcoded PHONE_PATTERNS."""
+    if scanner is not None:
+        from engine.scanner import ScannerOrchestrator
+        if isinstance(scanner, ScannerOrchestrator):
+            for sub_scanner in scanner.scanners:
+                desensitize_method = getattr(sub_scanner, "desensitize_patterns", None)
+                if callable(desensitize_method):
+                    compiled = desensitize_method()
+                    if compiled:
+                        return tuple(pattern for pattern, _rule in compiled)
+                    return ()
+    return PHONE_PATTERNS
 
 
 def _mask_phone_match(match: re.Match[str]) -> str:

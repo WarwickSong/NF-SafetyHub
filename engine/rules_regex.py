@@ -30,6 +30,10 @@ class RegexScanner(BaseScanner):
     async def reload(self) -> None:
         self._load_rules()
 
+    def desensitize_patterns(self) -> list[tuple[re.Pattern[str], dict]]:
+        """Return compiled patterns for enabled desensitize-level rules."""
+        return [(pattern, rule) for pattern, rule in self._compiled if rule.get("level") == "desensitize"]
+
     def _load_rules(self) -> None:
         if not self._config_path.exists():
             self._rules = []

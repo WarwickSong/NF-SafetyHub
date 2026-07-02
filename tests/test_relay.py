@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 
@@ -427,7 +428,7 @@ def test_desensitize_chat_request_body_supports_content_parts():
         ]
     }
 
-    sanitized = desensitize_chat_request_body(body)
+    sanitized = asyncio.run(desensitize_chat_request_body(body, None))
 
     assert sanitized["messages"][0]["content"][0]["text"] == "电话 138****5678"
     assert sanitized["messages"][0]["content"][1]["image_url"]["url"] == "https://example.com/a.png"
@@ -445,7 +446,7 @@ def test_desensitize_chat_request_body_skips_assistant_system_and_developer_role
         ]
     }
 
-    sanitized = desensitize_chat_request_body(body)
+    sanitized = asyncio.run(desensitize_chat_request_body(body, None))
 
     assert sanitized["messages"][0]["content"] == "用户电话 138****5678"
     assert sanitized["messages"][1]["content"] == "工具电话 139****5678"

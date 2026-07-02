@@ -30,6 +30,26 @@ async def test_regex_scanner_desensitizes_international_phone_number():
 
 
 @pytest.mark.asyncio
+async def test_regex_scanner_does_not_misidentify_plain_digit_strings():
+    scanner = RegexScanner(CONFIG_PATH)
+
+    results = await scanner.scan("订单号 123456789012345 已生成，时间戳 1700000000")
+
+    intl_results = [result for result in results if result.rule_id == "RG-PHONE-INTL"]
+    assert not intl_results
+
+
+@pytest.mark.asyncio
+async def test_regex_scanner_desensitizes_international_phone_with_00_prefix():
+    scanner = RegexScanner(CONFIG_PATH)
+
+    results = await scanner.scan("联系电话是 0086 138 1234 5678")
+
+    assert results
+    assert any(result.rule_id == "RG-PHONE-INTL" and result.desensitized for result in results)
+
+
+@pytest.mark.asyncio
 async def test_regex_scanner_keeps_last_match_for_repeated_rule_hits():
     scanner = RegexScanner(CONFIG_PATH)
 

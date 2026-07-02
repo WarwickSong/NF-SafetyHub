@@ -22,6 +22,15 @@ REPORTS_HOST_DIR="${APP_DATA_DIR}/reports"
 
 mkdir -p "${APP_DATA_DIR}" "${POSTGRES_DATA_DIR}" "${REPORTS_HOST_DIR}"
 
+# rules_config.yaml 通过 bind mount 挂入容器，容器内以 UID 1000 (safetyhub) 运行。
+# 宿主机上默认是 root:root 644，会导致管理员页面停用/启用规则时写入失败。
+RULES_CONFIG_FILE="${SAFETYHUB_RULES_CONFIG:-./engine/rules_config.yaml}"
+if [ -f "${RULES_CONFIG_FILE}" ]; then
+  if ! chown 1000:1000 "${RULES_CONFIG_FILE}" 2>/dev/null; then
+    chmod 666 "${RULES_CONFIG_FILE}" 2>/dev/null || true
+  fi
+fi
+
 if ! chown -R 1000:1000 "${REPORTS_HOST_DIR}" 2>/dev/null; then
   chmod -R a+rwX "${REPORTS_HOST_DIR}"
 fi

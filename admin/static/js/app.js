@@ -194,13 +194,17 @@ async function loadRules() {
 
 async function toggleRule(ruleId, enabled) {
   setRulesMessage("保存中...");
-  const payload = await SafetyHub.api(`/admin/api/rules/${encodeURIComponent(ruleId)}/toggle`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ enabled })
-  });
-  setRulesMessage(`${payload.rule.id} 已${payload.rule.enabled ? "启用" : "停用"}，热加载${payload.reloaded ? "已完成" : "未触发"}`);
-  await loadRules();
+  try {
+    const payload = await SafetyHub.api(`/admin/api/rules/${encodeURIComponent(ruleId)}/toggle`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled })
+    });
+    setRulesMessage(`${payload.rule.id} 已${payload.rule.enabled ? "启用" : "停用"}，热加载${payload.reloaded ? "已完成" : "未触发"}`);
+    await loadRules();
+  } catch (error) {
+    setRulesMessage(`操作失败：${error ? error.message : "未知错误"}。若为内网部署，请检查 rules_config.yaml 是否对应用运行用户可写。`);
+  }
 }
 
 async function reloadRules() {

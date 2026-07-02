@@ -170,11 +170,11 @@ regex_rules:
     description: "阶段 2 中国大陆手机号脱敏"
   - id: "RG-PHONE-INTL"
     name: "PII-国际电话"
-    pattern: "(?<!\\d)\\+?[1-9]\\d{0,2}[ -]?(?:\\d[ -]?){7,14}\\d(?!\\d)"
+    pattern: "(?<!\\d)(?:\\+|00)[1-9]\\d{0,2}[ -]?(?:\\d[ -]?){7,12}\\d(?!\\d)"
     level: "desensitize"
     enabled: true
     replacement: "phone"
-    description: "阶段 2 国际电话格式脱敏"
+    description: "阶段 2 国际电话格式脱敏（必须带 + 或 00 前缀，避免误识别纯数字串）"
   - id: "RG-EXPANSION-001"
     name: "扩展-身份证号"
     pattern: "(?<!\\d)[1-9]\\d{5}(?:19|20)\\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\\d|3[01])\\d{3}[\\dXx](?!\\w)"
