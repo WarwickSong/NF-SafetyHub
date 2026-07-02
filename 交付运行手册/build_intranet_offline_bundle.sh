@@ -86,8 +86,9 @@ else
   tar -C "${OUTPUT_ROOT}" -czf "${OUTPUT_ROOT}/${BUNDLE_NAME}.tar.gz" "${BUNDLE_NAME}"
 fi
 
-for f in "${OUTPUT_ROOT}/${BUNDLE_NAME}".tar.*; do
+# 仅写入文件名（不含路径），保证拷贝到任意目录都能 sha256sum -c
+( cd "${OUTPUT_ROOT}" && for f in "${BUNDLE_NAME}".tar.*; do
   sha256sum "$f" > "${f}.sha256"
-  echo "bundle: $f"
-  echo "checksum: ${f}.sha256"
-done
+  echo "bundle: ${OUTPUT_ROOT}/$f"
+  echo "checksum: ${OUTPUT_ROOT}/${f}.sha256"
+done )
