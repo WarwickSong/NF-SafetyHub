@@ -71,10 +71,11 @@ class SectionBar(Flowable):
 
 
 class LineChart(Flowable):
-    def __init__(self, title: str, labels: list[str], series: list[tuple[str, list[float], str]], width: float = 178 * mm, height: float = 48 * mm):
+    def __init__(self, title: str, labels: list[str], series: list[tuple[str, list[float], str]], visible_labels: list[str] | None = None, width: float = 178 * mm, height: float = 54 * mm):
         super().__init__()
         self.title = title
         self.labels = labels
+        self.visible_labels = visible_labels or labels
         self.series = series
         self.width = width
         self.height = height
@@ -87,7 +88,7 @@ class LineChart(Flowable):
         plot_width = self.width - left - right
         plot_height = self.height - top - bottom
         values = [value for _, row, _ in self.series for value in row]
-        max_value = (max(values) * 1.15) if values else 1
+        max_value = max(max(values) * 1.15, 1) if values else 1
         self.canv.setFillColor(colors.white)
         self.canv.setStrokeColor(colors.HexColor("#dbe4ef"))
         self.canv.roundRect(0, 0, self.width, self.height, 6, stroke=1, fill=1)
@@ -99,7 +100,9 @@ class LineChart(Flowable):
             self.canv.setStrokeColor(colors.HexColor("#e2e8f0"))
             self.canv.setLineWidth(0.3)
             self.canv.line(left, y, left + plot_width, y)
-        for index, label in enumerate(self.labels):
+        for index, label in enumerate(self.visible_labels):
+            if not label:
+                continue
             x = left + plot_width * index / max(1, len(self.labels) - 1)
             self.canv.setFillColor(colors.HexColor("#64748b"))
             self.canv.setFont(FONT, 6.5)
@@ -267,8 +270,17 @@ def _conclusion_rows(data: ReportBuildData) -> list[list[str]]:
 
 
 def _trend_rows(data: ReportBuildData) -> list[list[str]]:
-    rows = [["周期", "安全事件", "拦截", "CPU峰值", "排队峰值"]]
-    rows.extend([[item.get("label", ""), item.get("security_events", 0), item.get("blocked", 0), item.get("cpu_peak", 0), item.get("queue_peak", 0)] for item in data.trend[:12]])
+    rows = [["周期", "安全事件", "拦截", "CPU均/低/高", "排队均/低/高"]]
+    rows.extend([
+        [
+            item.get("label", ""),
+            item.get("security_events", 0),
+            item.get("blocked", 0),
+            _stat_text(item, "cpu"),
+            _stat_text(item, "queue"),
+        ]
+        for item in _table_trend_rows(data.trend)
+    ])
     return rows
 
 
@@ -280,15 +292,61 @@ def _rule_rows(data: ReportBuildData) -> list[list[str]]:
 
 def _runtime_table(data: ReportBuildData):
     runtime = data.runtime
-    return _table([["采样项", "平均值", "峰值/最低值", "说明"], ["CPU 使用率", runtime.get("cpu_avg", 0), runtime.get("cpu_peak", 0), "周期采样聚合"], ["内存使用率", runtime.get("memory_avg", 0), runtime.get("memory_peak", 0), "周期采样聚合"], ["/v1 排队", "-", runtime.get("queue_peak", 0), "峰值"], ["归档队列", "-", runtime.get("archive_queue_peak", 0), "峰值"], ["数据盘剩余", "-", _format_bytes(runtime.get("data_disk_min_free", 0)), "最低值"]], widths=[36 * mm, 36 * mm, 36 * mm, 70 * mm])
+    return _table([
+        ["采样项", "平均值", "最小值", "最大/最低", "说明"],
+        ["CPU 使用率", runtime.get("cpu_avg", 0), runtime.get("cpu_min", 0), runtime.get("cpu_peak", 0), "周期采样聚合"],
+        ["内存使用率", runtime.get("memory_avg", 0), runtime.get("memory_min", 0), runtime.get("memory_peak", 0), "周期采样聚合"],
+        ["/v1 排队", runtime.get("queue_avg", 0), runtime.get("queue_min", 0), runtime.get("queue_peak", 0), "周期采样聚合"],
+        ["归档队列", runtime.get("archive_queue_avg", 0), runtime.get("archive_queue_min", 0), runtime.get("archive_queue_peak", 0), "周期采样聚合"],
+        ["数据盘剩余", "-", "-", _format_bytes(runtime.get("data_disk_min_free", 0)), "周期内最低空闲"],
+        ["系统盘剩余", "-", "-", _format_bytes(runtime.get("system_disk_min_free", 0)), "周期内最低空闲"],
+    ], widths=[32 * mm, 28 * mm, 28 * mm, 32 * mm, 58 * mm])
 
 
 def _runtime_chart(data: ReportBuildData):
-    labels = [item.get("label", "") for item in data.trend[:12]] or ["无数据"]
-    cpu = [float(item.get("cpu_peak", 0) or 0) for item in data.trend[:12]] or [0]
-    queue = [float(item.get("queue_peak", 0) or 0) for item in data.trend[:12]] or [0]
-    archive = [float(item.get("archive_peak", 0) or 0) for item in data.trend[:12]] or [0]
-    return LineChart("运行状态曲线｜周期采样聚合", labels, [("CPU峰值%", cpu, "#2563eb"), ("排队峰值", queue, "#f59e0b"), ("归档队列峰值", archive, "#16a34a")])
+    rows = data.trend or [{"label": "无数据", "cpu_avg": 0, "queue_avg": 0, "archive_avg": 0}]
+    labels = [item.get("label", "") for item in rows]
+    cpu = [_metric_value(item, "cpu") for item in rows]
+    queue = [_metric_value(item, "queue") for item in rows]
+    archive = [_metric_value(item, "archive") for item in rows]
+    return LineChart("运行状态曲线｜均值趋势（横轴标签抽稀）", labels, [("CPU均值%", cpu, "#2563eb"), ("排队均值", queue, "#f59e0b"), ("归档队列均值", archive, "#16a34a")], _axis_labels(data.period.report_type, labels))
+
+
+def _metric_value(item: dict, prefix: str) -> float:
+    return float(item.get(prefix + "_avg", item.get(prefix + "_peak", 0)) or 0)
+
+
+def _axis_labels(report_type: str, labels: list[str]) -> list[str]:
+    if not labels:
+        return []
+    visible = [""] * len(labels)
+    if report_type == "daily":
+        for index, label in enumerate(labels):
+            if label.endswith(":00"):
+                visible[index] = label[:2]
+        return visible
+    if report_type == "monthly":
+        for index, label in enumerate(labels):
+            visible[index] = label[-2:]
+        return visible
+    for index, label in enumerate(labels):
+        if index == 0 or index == len(labels) - 1 or label.endswith("00:00"):
+            visible[index] = label[5:10]
+    return visible
+
+
+def _table_trend_rows(rows: list[dict]) -> list[dict]:
+    if len(rows) <= 14:
+        return rows
+    step = max(1, len(rows) // 14)
+    selected = rows[::step]
+    if selected[-1] is not rows[-1]:
+        selected.append(rows[-1])
+    return selected[:16]
+
+
+def _stat_text(item: dict, prefix: str) -> str:
+    return f"{item.get(prefix + '_avg', 0)}/{item.get(prefix + '_min', 0)}/{item.get(prefix + '_peak', 0)}"
 
 
 def _format_bytes(value: int) -> str:

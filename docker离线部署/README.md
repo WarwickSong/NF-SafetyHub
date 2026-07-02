@@ -134,7 +134,7 @@ sudo bash scripts/install.sh
 2. 安装 compose v2 到 `/usr/local/lib/docker/cli-plugins/docker-compose`，
    并在 `/usr/local/bin/docker-compose` 留软链接。
 3. 注册并启动 `containerd.service` / `docker.socket` / `docker.service`。
-4. 解压 `app-bundle/safetyhub_intranet_bundle_*.tar.gz` 到 `app-bundle/_extracted/`，调用其内置 `install.sh`：`docker load` 镜像 → 启动 PostgreSQL → 重建业务表前先用 `pg_dump` 把现有 `api_keys` 表备份到持久化数据盘（备份失败则中止部署）→ 保留 `api_keys` 表并重建其他业务表 → 启动 SafetyHub/Nginx。
+4. 解压 `app-bundle/safetyhub_intranet_bundle_*.tar.gz` 到 `app-bundle/_extracted/`，调用其内置 `install.sh`：`docker load` 镜像 → 启动 PostgreSQL → 重建业务表前先用 `pg_dump` 把现有 `api_keys` 表备份到持久化数据盘（备份失败则中止部署）→ 保留 `api_keys` / `runtime_settings` 表并重建其他业务表 → 创建并修复报表目录权限 → 启动 SafetyHub/Nginx。
 
 可选环境变量：
 
@@ -147,7 +147,11 @@ sudo bash scripts/install.sh
 安装完成后在服务器本机验证后端：
 
 ```bash
-curl http://127.0.0.1/health/ready
+cd app-bundle/_extracted/safetyhub_intranet_bundle_*/NF-SafetyHub
+source .env
+curl "http://127.0.0.1:${SAFETYHUB_HTTP_PORT:-80}/health/ready"
+docker compose ps
+docker compose logs --tail=100 safetyhub nginx
 ```
 
 运维网关配置完成后，从公网验证：
@@ -164,16 +168,17 @@ https://llm-safetyhub.nanfu.com/admin/
 
 ## 升级 / 替换旧版本（迭代新版本时使用）
 
-当目标机器上已经跑过一版 SafetyHub（容器名形如 `safetyhub-nginx` /
-`safetyhub-app` / `safetyhub-postgres`），想换成新版本时，按以下顺序操作：
+当目标机器上已经跑过一版 SafetyHub，想换成新版本时，按以下顺序操作。新版 Compose 不再固定容器名，优先通过 Compose 项目名和服务名定位实例。
 
 ### 1. 定位旧 compose 工作目录
 
 ```bash
-docker inspect safetyhub-nginx \
+docker compose ls
+docker ps --filter label=com.docker.compose.project=nf-safetyhub \
+  --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+docker inspect <任一 SafetyHub 容器名> \
   --format '{{ index .Config.Labels "com.docker.compose.project.working_dir"}}'
-
-docker inspect safetyhub-nginx \
+docker inspect <任一 SafetyHub 容器名> \
   --format '{{ index .Config.Labels "com.docker.compose.project.config_files"}}'
 ```
 
@@ -192,12 +197,11 @@ cd <旧 compose 工作目录>
 docker compose down
 ```
 
-如果 `docker compose down` 提示 `no configuration file provided: not found`，
-说明当前目录没有 compose 文件，按容器名直接停删即可：
+如果 `docker compose down` 提示 `no configuration file provided: not found`，说明当前目录没有 compose 文件。此时先用标签确认容器属于 `nf-safetyhub` 项目，再谨慎停删：
 
 ```bash
-docker stop safetyhub-nginx safetyhub-app safetyhub-postgres
-docker rm   safetyhub-nginx safetyhub-app safetyhub-postgres
+docker ps -q --filter label=com.docker.compose.project=nf-safetyhub | xargs -r docker stop
+docker ps -aq --filter label=com.docker.compose.project=nf-safetyhub | xargs -r docker rm
 ```
 
 > 注意：**不要**执行 `docker volume prune` / `rm -rf /var/lib/docker`，
@@ -238,13 +242,19 @@ sudo SKIP_DOCKER_INSTALL=true bash scripts/install.sh
 再正常 `sudo bash scripts/install.sh`。
 
 本次应用部署会保留内网 PostgreSQL 里的 `api_keys` 表，删除并重建其他 SafetyHub 业务表；不会从 JSON/SQL 重新导入 APIKey。执行前请确认应用包内 `NF-SafetyHub/.env` 的 `SAFETYHUB_POSTGRES_DATA_DIR`、`POSTGRES_DB`、`POSTGRES_USER`、`POSTGRES_PASSWORD`、`DB_URL` 指向旧内网数据库。
+如果旧环境启用了数据加密或已经保存过上游 Key / SafetyHub Key，还必须沿用旧环境的 `SAFETYHUB_DATA_KEY`，否则保留下来的 `api_keys` 记录可能无法解密。
 
 ### 5. 验证
 
 ```bash
-curl http://127.0.0.1/health/ready
+source .env
+curl "http://127.0.0.1:${SAFETYHUB_HTTP_PORT:-80}/health/ready"
 docker ps
+docker compose ps
+docker compose logs --tail=100 safetyhub nginx
 ```
+
+浏览器管理后台请通过 HTTPS 网关访问 `https://llm-safetyhub.nanfu.com/admin/`。服务器本机 HTTP 只用于健康检查；如果浏览器通过 HTTP 访问生产环境后台，登录 Cookie 会因 `Secure` 限制无法落地，表现为登录成功后又回到登录页。
 
 ## 卸载
 
@@ -261,3 +271,5 @@ sudo bash scripts/uninstall.sh
   老系统如 CentOS 7 需开启 cgroup v2 或改用包管理器版本的 docker。
 - **selinux**：RHEL 系如开启 selinux，需要 `setenforce 0` 或自行配置策略。
 - **iptables**：dockerd 依赖 `iptables`，目标机器需保留该命令。
+- **报表采样 PermissionError**：如果日志出现 `Permission denied: '/app/data/reports'`，说明应用数据目录不可写。先确认是否绕过了安装脚本直接 `docker compose up`；可在应用目录执行 `source .env && sudo mkdir -p "$SAFETYHUB_DATA_DIR/reports" && sudo chown -R 1000:1000 "$SAFETYHUB_DATA_DIR"`，不支持 `chown` 的环境用 `sudo chmod -R a+rwX "$SAFETYHUB_DATA_DIR"` 兜底。
+- **日志入口**：新版 Compose 不固定容器名，进入应用目录后使用 `docker compose logs -f safetyhub nginx`，不要依赖 `docker logs safetyhub-app`。

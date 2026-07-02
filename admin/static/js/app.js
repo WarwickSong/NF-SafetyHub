@@ -404,7 +404,7 @@ function renderApiKeyRow(item) {
       <div class="cell-sub">上游：${upstream}</div>
       <div class="cell-sub">${SafetyHub.text(item.provider_name)}</div>
     </td>
-    <td>${item.status}</td>
+    <td><span class="tag ${item.status === "active" ? "success" : item.status === "revoked" ? "danger" : "neutral"}">${item.status}</span></td>
     <td data-field="expires_at">
       <div class="cell-display">${item.expires_at ? SafetyHub.time(item.expires_at) : "-"}</div>
       <div class="cell-edit"><input type="datetime-local" data-edit="expires_at" value="${expires}"></div>

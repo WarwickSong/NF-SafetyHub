@@ -223,12 +223,16 @@ def period_from_values(report_type: str, period_value: str) -> ReportPeriod:
 def _bucket_label(period: ReportPeriod, value: datetime) -> str:
     local = value.astimezone(LOCAL_TZ)
     if period.report_type == "daily":
-        return f"{local.hour:02d}:00"
+        minute = local.minute - local.minute % 10
+        return f"{local.hour:02d}:{minute:02d}"
+    if period.report_type == "weekly":
+        hour = local.hour - local.hour % 2
+        return f"{local.date().isoformat()} {hour:02d}:00"
     return local.date().isoformat()
 
 
 def _build_trend(period: ReportPeriod, audits: list[tuple[datetime, str | None]], samples: list[RuntimeSample]) -> list[dict]:
-    buckets: dict[str, dict] = defaultdict(lambda: {"security_events": 0, "blocked": 0, "cpu_peak": 0.0, "queue_peak": 0, "archive_peak": 0})
+    buckets: dict[str, dict] = defaultdict(lambda: {"security_events": 0, "blocked": 0, "cpu_values": [], "queue_values": [], "archive_values": []})
     for created_at, action_taken in audits:
         bucket = buckets[_bucket_label(period, created_at)]
         bucket["security_events"] += 1
@@ -236,10 +240,30 @@ def _build_trend(period: ReportPeriod, audits: list[tuple[datetime, str | None]]
             bucket["blocked"] += 1
     for sample in samples:
         bucket = buckets[_bucket_label(period, sample.sampled_at)]
-        bucket["cpu_peak"] = max(bucket["cpu_peak"], sample.cpu_percent)
-        bucket["queue_peak"] = max(bucket["queue_peak"], sample.v1_queued)
-        bucket["archive_peak"] = max(bucket["archive_peak"], sample.archive_queue_size)
-    return [{"label": label, **values} for label, values in sorted(buckets.items())]
+        bucket["cpu_values"].append(float(sample.cpu_percent))
+        bucket["queue_values"].append(float(sample.v1_queued))
+        bucket["archive_values"].append(float(sample.archive_queue_size))
+    rows = []
+    for label, values in sorted(buckets.items()):
+        rows.append({
+            "label": label,
+            "security_events": values["security_events"],
+            "blocked": values["blocked"],
+            **_series_stats("cpu", values["cpu_values"]),
+            **_series_stats("queue", values["queue_values"]),
+            **_series_stats("archive", values["archive_values"]),
+        })
+    return rows
+
+
+def _series_stats(prefix: str, values: list[float]) -> dict:
+    if not values:
+        return {f"{prefix}_avg": 0.0, f"{prefix}_min": 0.0, f"{prefix}_peak": 0.0}
+    return {
+        f"{prefix}_avg": round(sum(values) / len(values), 2),
+        f"{prefix}_min": round(min(values), 2),
+        f"{prefix}_peak": round(max(values), 2),
+    }
 
 
 def _runtime_summary(samples: list[RuntimeSample]) -> dict:
@@ -250,12 +274,19 @@ def _runtime_summary(samples: list[RuntimeSample]) -> dict:
     return {
         "sample_count": len(samples),
         "cpu_avg": round(sum(cpu_values) / len(cpu_values), 2),
+        "cpu_min": round(min(cpu_values), 2),
         "cpu_peak": round(max(cpu_values), 2),
         "memory_avg": round(sum(memory_values) / len(memory_values), 2),
+        "memory_min": round(min(memory_values), 2),
         "memory_peak": round(max(memory_values), 2),
+        "queue_avg": round(sum(item.v1_queued for item in samples) / len(samples), 2),
+        "queue_min": min(item.v1_queued for item in samples),
         "queue_peak": max(item.v1_queued for item in samples),
+        "archive_queue_avg": round(sum(item.archive_queue_size for item in samples) / len(samples), 2),
+        "archive_queue_min": min(item.archive_queue_size for item in samples),
         "archive_queue_peak": max(item.archive_queue_size for item in samples),
         "data_disk_min_free": min(item.data_disk_free for item in samples),
+        "system_disk_min_free": min(item.system_disk_free for item in samples),
         "unhealthy_samples": sum(1 for item in samples if item.health_status != "healthy"),
     }
 

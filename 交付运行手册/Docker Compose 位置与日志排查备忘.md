@@ -28,17 +28,20 @@ cd /opt/docker离线部署/app-bundle/_extracted/safetyhub_intranet_bundle_YYYYM
 cd /opt/docker离线部署/app-bundle/_extracted/*/NF-SafetyHub
 ```
 
-如果忘记目录，可以通过容器反查 Compose 工作目录：
+如果忘记目录，可以先按 Compose 项目名找容器，再通过容器反查 Compose 工作目录：
 
 ```bash
-docker inspect safetyhub-nginx \
+docker compose ls
+docker ps --filter label=com.docker.compose.project=nf-safetyhub \
+  --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+docker inspect <任一 SafetyHub 容器名> \
   --format '{{ index .Config.Labels "com.docker.compose.project.working_dir"}}'
 ```
 
 查看 Compose 文件路径：
 
 ```bash
-docker inspect safetyhub-nginx \
+docker inspect <任一 SafetyHub 容器名> \
   --format '{{ index .Config.Labels "com.docker.compose.project.config_files"}}'
 ```
 
@@ -65,9 +68,9 @@ docker compose ps
 正常应看到：
 
 ```text
-safetyhub-app        Up ... healthy
-safetyhub-nginx      Up ... 0.0.0.0:80->80/tcp
-safetyhub-postgres   Up ... healthy
+nf-safetyhub-safetyhub-1   Up ... healthy
+nf-safetyhub-nginx-1       Up ... 0.0.0.0:80->80/tcp
+nf-safetyhub-postgres-1    Up ... healthy
 ```
 
 如果不在 Compose 工作目录，也可以直接看容器：
@@ -96,12 +99,12 @@ docker compose logs --tail=200 nginx
 docker compose logs -f safetyhub nginx
 ```
 
-不依赖 Compose 工作目录时，可以直接按容器名查看：
+不依赖 Compose 工作目录时，可以先按 Compose 项目标签找到容器名，再查看日志：
 
 ```bash
-docker logs --tail=200 safetyhub-app
-docker logs --tail=200 safetyhub-nginx
-docker logs -f safetyhub-app safetyhub-nginx
+docker ps --filter label=com.docker.compose.project=nf-safetyhub
+docker logs --tail=200 <应用容器名>
+docker logs --tail=200 <nginx容器名>
 ```
 
 ## 四、不要看错日志位置

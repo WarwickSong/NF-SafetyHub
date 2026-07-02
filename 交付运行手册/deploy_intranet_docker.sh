@@ -103,7 +103,11 @@ docker compose ps
 
 echo "waiting for safetyhub to become healthy..."
 for i in $(seq 1 30); do
-  status=$(docker inspect --format='{{.State.Health.Status}}' safetyhub-app 2>/dev/null || echo "unknown")
+  safetyhub_container_id=$(docker compose ps -q safetyhub 2>/dev/null || true)
+  status="unknown"
+  if [ -n "${safetyhub_container_id}" ]; then
+    status=$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${safetyhub_container_id}" 2>/dev/null || echo "unknown")
+  fi
   if [ "$status" = "healthy" ]; then
     echo "safetyhub is healthy"
     break
